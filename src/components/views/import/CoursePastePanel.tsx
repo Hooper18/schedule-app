@@ -208,6 +208,11 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
       }
     }
 
+    // Build schedule rows, dedupe within the batch on
+    // (course_id, day_of_week, start_time) — the unique key on
+    // weekly_schedule. Claude occasionally produces duplicate slots
+    // (e.g. listing the same course time twice as both lecture and
+    // tutorial), which would otherwise fail the INSERT immediately.
     const scheduleRows: Array<{
       course_id: string
       day_of_week: number
@@ -218,10 +223,18 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
       group_number: string | null
       teaching_weeks: string
     }> = []
+    const seenSlots = new Set<string>()
+    let slotDupCount = 0
     for (const c of candidates) {
       const courseId = codeToId.get(c.code)
       if (!courseId) continue
       for (const s of c.sessions) {
+        const key = `${courseId}|${s.day_of_week}|${s.start_time}`
+        if (seenSlots.has(key)) {
+          slotDupCount++
+          continue
+        }
+        seenSlots.add(key)
         scheduleRows.push({
           course_id: courseId,
           day_of_week: s.day_of_week,
@@ -249,8 +262,9 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
     setSaving(false)
     const insertedN = toInsert.length
     const updatedN = toUpdate.length
+    const dupNote = slotDupCount > 0 ? `（合并 ${slotDupCount} 条重复时段）` : ''
     setOkMsg(
-      `已处理 ${candidates.length} 门课程（新增 ${insertedN} / 更新 ${updatedN}），${scheduleRows.length} 条课表。`,
+      `已处理 ${candidates.length} 门课程（新增 ${insertedN} / 更新 ${updatedN}），${scheduleRows.length} 条课表${dupNote}。`,
     )
     setCandidates([])
     setInput('')
