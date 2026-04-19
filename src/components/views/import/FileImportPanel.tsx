@@ -15,8 +15,53 @@ import { useCalendar } from '../../../hooks/useCalendar'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
 import type { FileKind, ImportKind } from '../../../lib/fileParsers'
-import type { Course, EventType, Semester } from '../../../lib/types'
+import type {
+  Course,
+  EventSource,
+  EventType,
+  Semester,
+} from '../../../lib/types'
 import { typeLabel } from '../../../lib/utils'
+import Modal from '../../shared/Modal'
+
+const IMPORT_SOURCES: EventSource[] = [
+  'ppt_import',
+  'pdf_import',
+  'docx_import',
+  'photo_import',
+]
+
+interface EventRow {
+  user_id: string
+  semester_id: string
+  course_id: string | null
+  title: string
+  type: EventType
+  date: string | null
+  time: string | null
+  weight: string | null
+  is_group: boolean
+  notes: string | null
+  source: EventSource
+  source_file: string
+  status: 'pending'
+  date_inferred: boolean
+  date_source: string | null
+}
+
+interface Conflict {
+  courseId: string
+  courseLabel: string
+  existingCount: number
+}
+
+interface PendingSave {
+  rows: EventRow[]
+  conflicts: Conflict[]
+  dedupCount: number
+  fileCount: number
+  kind: ImportKind
+}
 
 // Lazy-load the parsers — they pull in pdfjs-dist + mammoth + jszip (~1MB
 // combined) which shouldn't hit the main bundle until the user uploads.
@@ -77,6 +122,7 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
   const [candidates, setCandidates] = useState<ParsedEvent[]>([])
   const [localErr, setLocalErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
+  const [pending, setPending] = useState<PendingSave | null>(null)
 
   const reset = () => {
     setPhase({ stage: 'idle' })
@@ -248,6 +294,9 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
     setCandidates((prev) => prev.filter((_, idx) => idx !== i))
   }
 
+  // Step 1: probe DB for existing file-import events on the courses we're
+  // about to touch, then either proceed straight to save (no conflicts)
+  // or surface a 替换/追加 confirmation dialog.
   const saveAll = async () => {
     if (!user || candidates.length === 0) return
     if (phase.stage !== 'review') return
@@ -256,10 +305,9 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
     const sourceFile = phase.files.map((f) => f.file.name).join(' + ')
     const files = phase.files
     const primaryKind = phase.primaryKind
-    setPhase({ stage: 'saving', files, primaryKind })
     setLocalErr(null)
 
-    const rawRows = candidates.map((c) => ({
+    const rawRows: EventRow[] = candidates.map((c) => ({
       user_id: user.id,
       semester_id: semester.id,
       course_id: c.course_id,
@@ -272,38 +320,134 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       notes: c.notes,
       source,
       source_file: sourceFile,
-      status: 'pending' as const,
+      status: 'pending',
       date_inferred: c.date_inferred === true,
       date_source: c.date_source ?? null,
     }))
 
-    // Dedup within this batch — Postgres rejects "ON CONFLICT DO UPDATE"
-    // that touches the same row twice in a single statement. Keep the
-    // first occurrence when the conflict key collides.
+    // Dedup within this batch.
     const seen = new Set<string>()
-    const rows: typeof rawRows = []
+    const rows: EventRow[] = []
     for (const r of rawRows) {
       const key = `${r.user_id}|${r.course_id ?? ''}|${r.title}|${r.date ?? ''}`
       if (seen.has(key)) continue
       seen.add(key)
       rows.push(r)
     }
+    const dedupCount = rawRows.length - rows.length
 
-    const { error } = await supabase
-      .from('events')
-      .upsert(rows, {
-        onConflict: 'user_id,course_id,title,date',
-        ignoreDuplicates: false,
+    // Probe for existing file-import events per affected course.
+    const affectedCourseIds = Array.from(
+      new Set(rows.map((r) => r.course_id).filter((v): v is string => !!v)),
+    )
+    let conflicts: Conflict[] = []
+    if (affectedCourseIds.length > 0) {
+      const { data: existing, error: qErr } = await supabase
+        .from('events')
+        .select('course_id')
+        .eq('user_id', user.id)
+        .eq('semester_id', semester.id)
+        .in('course_id', affectedCourseIds)
+        .in('source', IMPORT_SOURCES)
+      if (qErr) {
+        setLocalErr(`查已有导入事件失败：${qErr.message}`)
+        return
+      }
+      const counts = new Map<string, number>()
+      for (const e of existing ?? []) {
+        const cid = e.course_id as string
+        counts.set(cid, (counts.get(cid) ?? 0) + 1)
+      }
+      conflicts = Array.from(counts.entries())
+        .filter(([, n]) => n > 0)
+        .map(([courseId, n]) => {
+          const c = courses.find((x) => x.id === courseId)
+          return {
+            courseId,
+            courseLabel: c ? `${c.code} ${c.name}` : courseId,
+            existingCount: n,
+          }
+        })
+    }
+
+    if (conflicts.length === 0) {
+      // No prior imports on these courses → straight append.
+      await executeSave(rows, 'append', [], {
+        files,
+        primaryKind,
+        dedupCount,
       })
-    if (error) {
-      setLocalErr(error.message)
-      setPhase({ stage: 'review', files, primaryKind })
       return
     }
-    const dup = rawRows.length - rows.length
-    setOkMsg(
-      `已从 ${files.length} 个文件处理 ${rows.length} 条事件${dup > 0 ? `（批内去重 ${dup} 条）` : ''}，重复的按 (课程 + 标题 + 日期) 覆盖。`,
-    )
+
+    // Otherwise pause and ask the user.
+    setPending({
+      rows,
+      conflicts,
+      dedupCount,
+      fileCount: files.length,
+      kind: primaryKind,
+    })
+  }
+
+  // Step 2: actual save. 'replace' deletes prior *_import events on the
+  // affected courses first, 'append' leans on the unique index to dedupe.
+  const executeSave = async (
+    rows: EventRow[],
+    strategy: 'replace' | 'append',
+    replaceCourseIds: string[],
+    ctx: {
+      files: SelectedFile[]
+      primaryKind: ImportKind
+      dedupCount: number
+    },
+  ) => {
+    if (!user) return
+    setPending(null)
+    setPhase({ stage: 'saving', files: ctx.files, primaryKind: ctx.primaryKind })
+    setLocalErr(null)
+
+    let deleted = 0
+    if (strategy === 'replace' && replaceCourseIds.length > 0) {
+      const { error: delErr, count } = await supabase
+        .from('events')
+        .delete({ count: 'exact' })
+        .eq('user_id', user.id)
+        .eq('semester_id', semester.id)
+        .in('course_id', replaceCourseIds)
+        .in('source', IMPORT_SOURCES)
+      if (delErr) {
+        setLocalErr(`清理旧导入失败：${delErr.message}`)
+        setPhase({
+          stage: 'review',
+          files: ctx.files,
+          primaryKind: ctx.primaryKind,
+        })
+        return
+      }
+      deleted = count ?? 0
+    }
+
+    const { error } = await supabase.from('events').upsert(rows, {
+      onConflict: 'user_id,course_id,title,date',
+      ignoreDuplicates: false,
+    })
+    if (error) {
+      setLocalErr(error.message)
+      setPhase({
+        stage: 'review',
+        files: ctx.files,
+        primaryKind: ctx.primaryKind,
+      })
+      return
+    }
+
+    const dupNote = ctx.dedupCount > 0 ? `（批内去重 ${ctx.dedupCount} 条）` : ''
+    const msg =
+      strategy === 'replace'
+        ? `已从 ${ctx.files.length} 个文件保存 ${rows.length} 条事件${dupNote}，替换掉 ${deleted} 条旧导入。`
+        : `已从 ${ctx.files.length} 个文件处理 ${rows.length} 条事件${dupNote}，按 (课程 + 标题 + 日期) 去重合并。`
+    setOkMsg(msg)
     setCandidates([])
     reset()
     onSaved()
@@ -491,7 +635,106 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
           </div>
         </>
       )}
+
+      <ConflictModal
+        pending={pending}
+        onCancel={() => setPending(null)}
+        onAppend={() =>
+          pending &&
+          executeSave(pending.rows, 'append', [], {
+            files: phase.stage === 'review' ? phase.files : [],
+            primaryKind: pending.kind,
+            dedupCount: pending.dedupCount,
+          })
+        }
+        onReplace={() =>
+          pending &&
+          executeSave(
+            pending.rows,
+            'replace',
+            pending.conflicts.map((c) => c.courseId),
+            {
+              files: phase.stage === 'review' ? phase.files : [],
+              primaryKind: pending.kind,
+              dedupCount: pending.dedupCount,
+            },
+          )
+        }
+      />
     </section>
+  )
+}
+
+interface ConflictModalProps {
+  pending: PendingSave | null
+  onCancel: () => void
+  onAppend: () => void
+  onReplace: () => void
+}
+
+function ConflictModal({ pending, onCancel, onAppend, onReplace }: ConflictModalProps) {
+  return (
+    <Modal
+      open={!!pending}
+      title="课程已有导入事件"
+      onClose={onCancel}
+      footer={
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-2.5 rounded-lg bg-card border border-border text-dim text-sm"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onAppend}
+            className="px-3 py-2.5 rounded-lg bg-card border border-border text-text text-sm font-medium"
+          >
+            追加
+          </button>
+          <button
+            type="button"
+            onClick={onReplace}
+            className="flex-1 py-2.5 rounded-lg bg-red-500 text-white text-sm font-medium"
+          >
+            替换
+          </button>
+        </div>
+      }
+    >
+      {pending && (
+        <div className="space-y-3 text-sm">
+          <div className="text-text">
+            检测到以下课程已有来自文件导入的事件：
+          </div>
+          <ul className="rounded-lg bg-card border border-border divide-y divide-border">
+            {pending.conflicts.map((c) => (
+              <li key={c.courseId} className="p-2.5 flex justify-between gap-2">
+                <span className="text-text truncate">{c.courseLabel}</span>
+                <span className="text-xs text-amber-600 shrink-0">
+                  已有 {c.existingCount} 条
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="text-xs text-dim leading-relaxed space-y-1">
+            <div>
+              <span className="text-red-500 font-medium">替换</span>
+              ：删掉这些课程下所有 <code>ppt_import / pdf_import /
+              docx_import / photo_import</code> 来源的旧事件，然后插入本次
+              新事件。手动 / 快速添加 / 其他课程的事件不受影响。
+            </div>
+            <div>
+              <span className="text-text font-medium">追加</span>
+              ：保留旧事件，按 (课程 + 标题 + 日期) 去重合并；同键会被新值
+              覆盖。
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 
