@@ -436,7 +436,8 @@ ${courseList}
 Extraction guidelines:
 - Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, revision session, or milestone mentioned in the text.
 - Multiple instances of the same event type (e.g. "Quiz 1", "Quiz 2", "Quiz 3") → separate entries.
-- CRITICAL — split every distinctly-weighted assessment into its own event: any item that has its own percentage weight must be its own event, even if the PPT lists several together on one line or in one bullet group. Example: "Sales Letter (10%), Poster (10%), Audience Profile (5%)" must become THREE separate events (title="Sales Letter" weight="10%", title="Poster" weight="10%", title="Audience Profile" weight="5%"). Never merge weighted items into another event's notes field.
+- CRITICAL — parent-child assessments (check FIRST, before splitting): some assessments are shown as a parent with its own total weight AND a breakdown of sub-components. Detection rule: the sub-components' individual weights sum EXACTLY to the parent's weight. Example: "Assignment 2 (25%) — Sales Letter 10%, Poster 10%, Audience Profile 5%" (10 + 10 + 5 = 25 → matches parent). In that case emit ONLY the parent event (title="Assignment 2", weight="25%") and put the sub-components' breakdown in the notes field ("Sales Letter 10%; Poster 10%; Audience Profile 5%"). DO NOT also emit the sub-components as separate events — that would double-count weights and push the total above 100%. If the sub-weights do NOT sum to the parent weight, treat the items as independent (fall through to the next rule).
+- Otherwise, split every distinctly-weighted assessment into its own event: when weighted items are listed without a matching parent total, each becomes its own event. Example: "Sales Letter (10%), Poster (10%), Audience Profile (5%)" with NO overarching "Assignment 2, 25%" → THREE separate events. Never merge independent weighted items into another event's notes field.
 - DO NOT extract consultation hours, office hours, or 答疑时间. Those are recurring course availability metadata, not scheduling events.
 - DO NOT extract generic lecture sessions or weekly tutorial slots that lack a specific date — those belong on the course timetable, not the event list.
 - For each event:
@@ -447,7 +448,7 @@ Extraction guidelines:
   - weight: as shown ("15%", "20 marks") if given; null otherwise.
   - is_group: true ONLY if the text explicitly says group / team / 小组 / pair.
   - course_id: UUID from the course list above. Try to match the document's course code (e.g. "COM112") to an entry — match on code case-insensitively. Leave null if no confident match.
-  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. Do NOT use notes to carry other assessments' weights — each weighted item has its own event.
+  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. EXCEPTION: when the parent-child rule above applies, put the sub-components' breakdown here (format: "Sales Letter 10%; Poster 10%; Audience Profile 5%"). Outside that case, do NOT carry other independent assessments' weights in notes — each independent weighted item has its own event.
   - date_inferred (REQUIRED on every event, even when date is null): boolean.
       * true when you computed the date from a Week-N reference, or from an academic-calendar anchor such as "Final Exam" → examination week start.
       * false when the document contains an explicit calendar date (e.g. "22 MAY 2026", "Week 3 · May 22 2026" — because the explicit date is present).
