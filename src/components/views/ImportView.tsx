@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Upload, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
 import AddEventForm from './import/AddEventForm'
 import AddCourseForm from './import/AddCourseForm'
 import QuickAddPanel from './import/QuickAddPanel'
+import FileImportPanel from './import/FileImportPanel'
 
 type Tab = 'event' | 'course'
 
@@ -32,12 +33,11 @@ export default function ImportView() {
         onSaved={reloadEvents}
       />
 
-      <button
-        disabled
-        className="w-full p-3 rounded-xl bg-card border border-dashed border-border text-dim flex items-center justify-center gap-2 text-sm opacity-60"
-      >
-        <Upload size={16} /> 上传文件 (Phase 2)
-      </button>
+      <FileImportPanel
+        semester={semester}
+        courses={courses}
+        onSaved={reloadEvents}
+      />
 
       <div className="flex gap-2 bg-card rounded-lg p-1 border border-border">
         <button

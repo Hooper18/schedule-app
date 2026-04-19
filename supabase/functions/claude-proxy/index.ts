@@ -80,7 +80,11 @@ interface RequestBody {
   courses?: unknown
   today?: unknown
   semester_week1_start?: unknown
+  action?: unknown // "quick_add" (default) | "file_import"
+  file_type?: unknown // "pptx" | "pdf" | "docx" — only for file_import
 }
+
+type Action = "quick_add" | "file_import"
 
 const recordEventsTool = {
   name: "record_events",
@@ -229,6 +233,71 @@ Other guidelines:
 - Always call record_events exactly once — return an empty events array if nothing actionable.`
 }
 
+// File-import prompt — input is the full extracted text of an uploaded
+// course document (pptx/pdf/docx). Reuses the record_events tool and the
+// same date anchor logic; differs in framing and extraction guidance.
+function buildFileImportSystemPrompt(
+  courses: CourseRef[],
+  today: string,
+  week1Start: string | null,
+  fileType: string | null,
+): string {
+  const courseList = courses.length
+    ? courses.map((c) => `- ${c.code} (id: ${c.id}): ${c.name}`).join("\n")
+    : "(no courses registered yet)"
+
+  const todayDate = parseIsoDate(today)
+  const wd = todayDate.getDay()
+  const humanCn = `${todayDate.getFullYear()}年${todayDate.getMonth() + 1}月${todayDate.getDate()}日`
+  const anchors = buildDateAnchors(todayDate)
+  const tomorrow = formatIso(addDays(todayDate, 1))
+  const dayAfter = formatIso(addDays(todayDate, 2))
+
+  const fileHint =
+    fileType === "pptx"
+      ? "The text was extracted from a PowerPoint deck; slides are separated roughly in order, and event details may be split across adjacent slides (e.g. a title on one slide, dates on the next)."
+      : fileType === "pdf"
+        ? "The text was extracted from a PDF (likely a course outline or syllabus). Assessment summaries are often in tables — dates and weights may be in adjacent columns."
+        : fileType === "docx"
+          ? "The text was extracted from a Word document (likely a course outline or assignment brief)."
+          : "The text was extracted from a course file."
+
+  return `You are analysing the extracted text of a course file and must extract EVERY scheduling event into a structured list. ${fileHint}
+
+今天是 ${humanCn}，${CN_WEEKDAYS[wd]}（${EN_WEEKDAYS[wd]}）。
+Today: ${today} (${EN_WEEKDAYS[wd]}).${week1Start ? `\nSemester Week 1 starts: ${week1Start}` : ""}
+
+== Date resolution anchors (pre-computed — DO NOT recompute, look these up) ==
+${anchors}
+  明天 / tomorrow = ${tomorrow}
+  后天 / day after tomorrow = ${dayAfter}
+
+Date rules:
+- Prefer absolute dates written in the document. Convert any format to YYYY-MM-DD.
+- If the document only says "Week N" (teaching week), compute as semester week1_start + 7*(N-1) days. If week1_start is unknown, leave date null.
+- Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
+- Times use 24-hour HH:MM. "3pm" → "15:00".
+
+Available courses (match course_code ↔ course_id from this list):
+${courseList}
+
+Extraction guidelines:
+- Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, tutorial slot, consultation slot, holiday, revision session, or milestone mentioned in the text.
+- Multiple instances of the same event type (e.g. "Quiz 1", "Quiz 2", "Quiz 3") → separate entries.
+- For each event:
+  - title: short, human-readable. "Quiz 3" / "Final Exam" / "Assignment 2 submission" / "Lab 4 report".
+  - type: most specific match from the enum. "Final" → exam, "Midterm" → midterm, "Lab report" → lab_report, "Video submission" → video_submission, generic "assignment due" → deadline.
+  - date: absolute YYYY-MM-DD, or null if the document genuinely doesn't say.
+  - time: 24h HH:MM if given; null otherwise.
+  - weight: as shown ("15%", "20 marks") if given; null otherwise.
+  - is_group: true ONLY if the text explicitly says group / team / 小组 / pair.
+  - course_id: UUID from the course list above. Try to match the document's course code (e.g. "COM112") to an entry — match on code case-insensitively. Leave null if no confident match.
+  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful.
+- Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
+- Do NOT include generic lecture sessions or weekly tutorials that lack specific dates.
+- Always call record_events exactly once.`
+}
+
 async function verifyUser(
   authHeader: string | null,
 ): Promise<{ userId: string } | { error: string }> {
@@ -352,19 +421,44 @@ Deno.serve(async (req) => {
       ? body.semester_week1_start
       : null
 
+  // action defaults to quick_add for backwards compat with existing callers.
+  const actionRaw = body.action
+  let action: Action = "quick_add"
+  if (typeof actionRaw === "string") {
+    if (actionRaw === "quick_add" || actionRaw === "file_import") {
+      action = actionRaw
+    } else {
+      return jsonError(
+        400,
+        "validate_input",
+        `'action' must be 'quick_add' or 'file_import', got '${actionRaw}'`,
+      )
+    }
+  }
+
+  const fileType =
+    typeof body.file_type === "string" ? body.file_type : null
+
+  // file_import payloads are typically larger (a full syllabus) and may
+  // produce many events, so give it more room than quick_add.
+  const systemPrompt =
+    action === "file_import"
+      ? buildFileImportSystemPrompt(courses, today, week1Start, fileType)
+      : buildSystemPrompt(courses, today, week1Start)
+  const maxTokens = action === "file_import" ? 8192 : 4096
+
   console.log(
-    `[claude-proxy] user=${userId} input_len=${input.length} courses=${courses.length} today=${today}`,
+    `[claude-proxy] user=${userId} action=${action} input_len=${input.length} courses=${courses.length} today=${today}`,
   )
 
   try {
-    // Note: adaptive thinking is incompatible with forced tool_choice on
-    // Opus 4.7 ("Thinking may not be enabled when tool_choice forces tool
-    // use"). We keep forced tool_choice for guaranteed structured output
-    // and drop thinking — the extraction task is simple enough without it.
+    // Note: forced tool_choice is incompatible with adaptive thinking. We
+    // keep forced tool_choice (guarantees structured output) and skip
+    // thinking — extraction is simple enough without it.
     const response = await anthropic.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 4096,
-      system: buildSystemPrompt(courses, today, week1Start),
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: maxTokens,
+      system: systemPrompt,
       tools: [recordEventsTool],
       tool_choice: { type: "tool", name: "record_events" },
       messages: [{ role: "user", content: input }],

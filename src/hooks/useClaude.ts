@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Course, EventType, Semester } from '../lib/types'
+import type { FileKind } from '../lib/fileParsers'
 import { todayISO } from '../lib/utils'
 
 export interface ParsedEvent {
@@ -57,5 +58,46 @@ export function useClaude() {
     [],
   )
 
-  return { parseEvents, loading, error }
+  const parseFileText = useCallback(
+    async (
+      input: string,
+      fileKind: FileKind,
+      courses: Course[],
+      semester: Semester | null,
+    ) => {
+      setLoading(true)
+      setError(null)
+      try {
+        const { data, error: fnError } = await supabase.functions.invoke<ParseResponse>(
+          'claude-proxy',
+          {
+            body: {
+              action: 'file_import',
+              file_type: fileKind,
+              input,
+              courses: courses.map((c) => ({
+                id: c.id,
+                code: c.code,
+                name: c.name,
+              })),
+              today: todayISO(),
+              semester_week1_start: semester?.week1_start ?? null,
+            },
+          },
+        )
+        if (fnError) throw fnError
+        if (!data) throw new Error('空响应')
+        return data.events
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        setError(msg)
+        throw e
+      } finally {
+        setLoading(false)
+      }
+    },
+    [],
+  )
+
+  return { parseEvents, parseFileText, loading, error }
 }
