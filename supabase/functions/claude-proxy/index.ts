@@ -3,11 +3,18 @@
 // Accepts natural-language scheduling input from an authenticated user and
 // uses Claude to extract structured events. The Anthropic API key lives in
 // Supabase Function Secrets and is never exposed to the browser.
+//
+// Deployed with verify_jwt=false so CORS preflight (OPTIONS) passes through
+// to this handler — we validate the user's JWT manually on POST by calling
+// Supabase's /auth/v1/user endpoint.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import Anthropic from "npm:@anthropic-ai/sdk@^0.90.0"
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")
+
 if (!ANTHROPIC_API_KEY) {
   console.error("ANTHROPIC_API_KEY is not set in Supabase Function Secrets")
 }
@@ -19,7 +26,10 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
 }
+
+const JSON_HEADERS = { ...CORS_HEADERS, "Content-Type": "application/json" }
 
 const EVENT_TYPES = [
   "exam",
@@ -132,15 +142,35 @@ Guidelines:
 - Always call the record_events tool exactly once. Return an empty events array if nothing actionable is present.`
 }
 
+// Validate the user's Supabase JWT by calling /auth/v1/user. Returns the
+// user's ID on success, null on any failure. Avoids pulling in
+// supabase-js just for this one check.
+async function verifyUser(authHeader: string | null): Promise<string | null> {
+  if (!authHeader || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        Authorization: authHeader,
+        apikey: SUPABASE_ANON_KEY,
+      },
+    })
+    if (!resp.ok) return null
+    const user = (await resp.json()) as { id?: string }
+    return user.id ?? null
+  } catch {
+    return null
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: CORS_HEADERS })
+    return new Response(null, { status: 204, headers: CORS_HEADERS })
   }
 
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     })
   }
 
@@ -149,11 +179,16 @@ Deno.serve(async (req) => {
       JSON.stringify({
         error: "Server not configured: ANTHROPIC_API_KEY missing",
       }),
-      {
-        status: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
+      { status: 500, headers: JSON_HEADERS },
     )
+  }
+
+  const userId = await verifyUser(req.headers.get("Authorization"))
+  if (!userId) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: JSON_HEADERS,
+    })
   }
 
   let body: RequestBody
@@ -162,7 +197,7 @@ Deno.serve(async (req) => {
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     })
   }
 
@@ -170,7 +205,7 @@ Deno.serve(async (req) => {
   if (typeof input !== "string" || !input.trim()) {
     return new Response(JSON.stringify({ error: "input is required" }), {
       status: 400,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     })
   }
 
@@ -196,10 +231,7 @@ Deno.serve(async (req) => {
           error: "Claude did not return a tool_use block",
           stop_reason: response.stop_reason,
         }),
-        {
-          status: 502,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
+        { status: 502, headers: JSON_HEADERS },
       )
     }
 
@@ -208,35 +240,26 @@ Deno.serve(async (req) => {
         ...(toolUse.input as Record<string, unknown>),
         usage: response.usage,
       }),
-      {
-        status: 200,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
+      { status: 200, headers: JSON_HEADERS },
     )
   } catch (err) {
     console.error("claude-proxy error:", err)
     if (err instanceof Anthropic.RateLimitError) {
       return new Response(
         JSON.stringify({ error: "rate_limited", message: err.message }),
-        {
-          status: 429,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
+        { status: 429, headers: JSON_HEADERS },
       )
     }
     if (err instanceof Anthropic.APIError) {
       return new Response(
         JSON.stringify({ error: "anthropic_api_error", message: err.message }),
-        {
-          status: err.status ?? 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
+        { status: err.status ?? 500, headers: JSON_HEADERS },
       )
     }
     const message = err instanceof Error ? err.message : String(err)
     return new Response(JSON.stringify({ error: "internal", message }), {
       status: 500,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
     })
   }
 })
