@@ -1,4 +1,10 @@
 import Layout from '../components/layout/Layout'
+import TimelineView from '../components/views/TimelineView'
+
 export default function Timeline() {
-  return <Layout title="Timeline"><div className="p-6 text-dim">Loading…</div></Layout>
+  return (
+    <Layout title="Timeline">
+      <TimelineView />
+    </Layout>
+  )
 }
