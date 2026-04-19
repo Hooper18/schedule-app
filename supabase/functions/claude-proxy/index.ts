@@ -381,28 +381,36 @@ ${calendarText}
 
 Date rules:
 - Prefer absolute dates written in the document. Convert any format to YYYY-MM-DD.
-- If the document only says "Week N" (teaching week), compute as semester week1_start + 7*(N-1) days. If week1_start is unknown, leave date null.
+- "Week N" (teaching week) semantics: a week runs Monday–Sunday, anchored to semester week1_start (which is the Monday of Week 1, or the first teaching day — treat it as day 0 of Week 1).
+  • A deadline phrased as "Week N" (no weekday specified) → the LAST DAY of Week N, i.e. the Saturday of that week. Formula: week1_start + 7*(N-1) + 5 days.
+  • An event pinned to a specific weekday in Week N (e.g. "Week 5 Friday") → week1_start + 7*(N-1) + (weekday_offset) days.
+  • If week1_start is unknown (no "Semester Week 1 starts" line above), leave date null.
+- "Final Exam" / "Final Examination" without an explicit date → use the FIRST DAY of the examination week. Look up the academic calendar above for the row typed [exam] and use its start date. If no such row exists, leave date null.
+- "Midterm" without a date → leave date null (do NOT guess mid-semester); the user will fill it in.
 - Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly says so.
 - Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
+- If the document mentions no date and no "Week N" reference at all, leave date null. That is correct — do NOT invent a date.
 - Times use 24-hour HH:MM. "3pm" → "15:00".
 
 Available courses (match course_code ↔ course_id from this list):
 ${courseList}
 
 Extraction guidelines:
-- Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, tutorial slot, consultation slot, holiday, revision session, or milestone mentioned in the text.
+- Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, revision session, or milestone mentioned in the text.
 - Multiple instances of the same event type (e.g. "Quiz 1", "Quiz 2", "Quiz 3") → separate entries.
+- CRITICAL — split every distinctly-weighted assessment into its own event: any item that has its own percentage weight must be its own event, even if the PPT lists several together on one line or in one bullet group. Example: "Sales Letter (10%), Poster (10%), Audience Profile (5%)" must become THREE separate events (title="Sales Letter" weight="10%", title="Poster" weight="10%", title="Audience Profile" weight="5%"). Never merge weighted items into another event's notes field.
+- DO NOT extract consultation hours, office hours, or 答疑时间. Those are recurring course availability metadata, not scheduling events.
+- DO NOT extract generic lecture sessions or weekly tutorial slots that lack a specific date — those belong on the course timetable, not the event list.
 - For each event:
   - title: short, human-readable. "Quiz 3" / "Final Exam" / "Assignment 2 submission" / "Lab 4 report".
   - type: most specific match from the enum. "Final" → exam, "Midterm" → midterm, "Lab report" → lab_report, "Video submission" → video_submission, generic "assignment due" → deadline.
-  - date: absolute YYYY-MM-DD, or null if the document genuinely doesn't say.
+  - date: absolute YYYY-MM-DD, or null if the document genuinely doesn't say (and no Week-N hint + no "Final Exam" shortcut applies).
   - time: 24h HH:MM if given; null otherwise.
   - weight: as shown ("15%", "20 marks") if given; null otherwise.
   - is_group: true ONLY if the text explicitly says group / team / 小组 / pair.
   - course_id: UUID from the course list above. Try to match the document's course code (e.g. "COM112") to an entry — match on code case-insensitively. Leave null if no confident match.
-  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful.
+  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. Do NOT use notes to carry other assessments' weights — each weighted item has its own event.
 - Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
-- Do NOT include generic lecture sessions or weekly tutorials that lack specific dates.
 - Always call record_events exactly once.`
 }
 
