@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/* Theme tokens: light (default) and dark via data-theme attribute */
+:root,
+[data-theme='light'] {
+  --bg-main: #ffffff;
+  --bg-card: #f9fafb;
+  --bg-hover: #f3f4f6;
+  --border: #e5e7eb;
+  --text: #111827;
+  --text-dim: #6b7280;
+  --text-muted: #9ca3af;
+  --accent: #3b82f6;
+}
+
+[data-theme='dark'] {
+  --bg-main: #0a0a0f;
+  --bg-card: #141419;
+  --bg-hover: #1a1a22;
+  --border: #27272a;
+  --text: #e4e4e7;
+  --text-dim: #71717a;
+  --text-muted: #52525b;
+  --accent: #3b82f6;
+}
+
+/* Expose tokens as Tailwind v4 theme colors so bg-main / text-dim etc. work */
+@theme {
+  --color-main: var(--bg-main);
+  --color-card: var(--bg-card);
+  --color-hover: var(--bg-hover);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-dim: var(--text-dim);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* Safe area support for mobile */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear {
+  display: none;
+}

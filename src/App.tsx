@@ -1,0 +1,50 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import AuthPage from './pages/Auth'
+import Timeline from './pages/Timeline'
+import CalendarPage from './pages/Calendar'
+import Courses from './pages/Courses'
+import CourseDetail from './pages/CourseDetail'
+import Import from './pages/Import'
+
+function Loading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-main">
+      <div className="w-8 h-8 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+    </div>
+  )
+}
+
+function Protected({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <Loading />
+  if (!user) return <Navigate to="/auth" replace />
+  return <>{children}</>
+}
+
+function AppRoutes() {
+  const { user, loading } = useAuth()
+  if (loading) return <Loading />
+  return (
+    <Routes>
+      <Route path="/auth" element={user ? <Navigate to="/" replace /> : <AuthPage />} />
+      <Route path="/" element={<Protected><Timeline /></Protected>} />
+      <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
+      <Route path="/courses" element={<Protected><Courses /></Protected>} />
+      <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
+      <Route path="/import" element={<Protected><Import /></Protected>} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}
