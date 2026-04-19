@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
-import { Upload, FileText, Check, X, Trash2, Loader2 } from 'lucide-react'
+import { Upload, FileText, Check, X, Trash2, Loader2, Image as ImageIcon } from 'lucide-react'
 import { useClaude, type ParsedEvent } from '../../../hooks/useClaude'
+import { useCalendar } from '../../../hooks/useCalendar'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
-import type { FileKind } from '../../../lib/fileParsers'
+import type { ImportKind } from '../../../lib/fileParsers'
 import type { Course, EventType, Semester } from '../../../lib/types'
 import { typeLabel } from '../../../lib/utils'
 
@@ -30,9 +31,9 @@ const EVENT_TYPES: EventType[] = [
 
 type Phase =
   | { stage: 'idle' }
-  | { stage: 'extracting'; name: string }
-  | { stage: 'parsing'; name: string; chars: number }
-  | { stage: 'review'; name: string; kind: FileKind }
+  | { stage: 'extracting'; name: string; kind: ImportKind }
+  | { stage: 'parsing'; name: string; kind: ImportKind; chars: number }
+  | { stage: 'review'; name: string; kind: ImportKind }
   | { stage: 'saving' }
 
 interface Props {
@@ -43,7 +44,8 @@ interface Props {
 
 export default function FileImportPanel({ semester, courses, onSaved }: Props) {
   const { user } = useAuth()
-  const { parseFileText, loading, error } = useClaude()
+  const { parseFileText, parseImage, loading, error } = useClaude()
+  const { entries: calendar } = useCalendar(semester.id)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [phase, setPhase] = useState<Phase>({ stage: 'idle' })
@@ -62,45 +64,69 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
     setLocalErr(null)
     setOkMsg(null)
     setCandidates([])
-    setPhase({ stage: 'extracting', name: file.name })
     const parsers = await loadParsers()
-    if (!parsers.isSupported(file)) {
-      setLocalErr('只支持 .pptx / .pdf / .docx')
-      setPhase({ stage: 'idle' })
+    const kind = parsers.classifyFile(file)
+    if (!kind) {
+      setLocalErr('不支持的格式：.pptx / .pdf / .docx / .png / .jpg / .jpeg')
       return
     }
-    let extracted
+    const sizeErr = parsers.checkSize(file, kind)
+    if (sizeErr) {
+      setLocalErr(sizeErr)
+      return
+    }
+    setPhase({ stage: 'extracting', name: file.name, kind })
+
     try {
-      extracted = await parsers.extractText(file)
+      if (kind === 'image') {
+        const img = await parsers.readImage(file)
+        setPhase({
+          stage: 'parsing',
+          name: file.name,
+          kind,
+          chars: img.base64.length,
+        })
+        const events = await parseImage(
+          img.base64,
+          img.mediaType,
+          '',
+          courses,
+          calendar,
+          semester,
+        )
+        setCandidates(events)
+        setPhase({ stage: 'review', name: file.name, kind })
+        if (events.length === 0) {
+          setLocalErr('Claude 没从图片里识别出事件')
+        }
+      } else {
+        const extracted = await parsers.extractText(file)
+        if (!extracted.text.trim()) {
+          setLocalErr('文件里没抽取到任何文字')
+          setPhase({ stage: 'idle' })
+          return
+        }
+        setPhase({
+          stage: 'parsing',
+          name: file.name,
+          kind,
+          chars: extracted.text.length,
+        })
+        const events = await parseFileText(
+          extracted.text,
+          extracted.kind,
+          courses,
+          calendar,
+          semester,
+        )
+        setCandidates(events)
+        setPhase({ stage: 'review', name: file.name, kind })
+        if (events.length === 0) {
+          setLocalErr('Claude 没从文件里识别出事件')
+        }
+      }
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : String(e))
-      setPhase({ stage: 'idle' })
-      return
-    }
-    if (!extracted.text.trim()) {
-      setLocalErr('文件里没抽取到任何文字')
-      setPhase({ stage: 'idle' })
-      return
-    }
-    setPhase({
-      stage: 'parsing',
-      name: file.name,
-      chars: extracted.text.length,
-    })
-    try {
-      const events = await parseFileText(
-        extracted.text,
-        extracted.kind,
-        courses,
-        semester,
-      )
-      setCandidates(events)
-      setPhase({ stage: 'review', name: file.name, kind: extracted.kind })
-      if (events.length === 0) {
-        setLocalErr('Claude 没从文件里识别出事件')
-      }
-    } catch {
-      // error state via hook.error
       setPhase({ stage: 'idle' })
     }
   }
@@ -160,7 +186,7 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pptx,.pdf,.docx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".pptx,.pdf,.docx,.png,.jpg,.jpeg,.webp,image/*"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
@@ -172,9 +198,11 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="w-full p-4 rounded-xl bg-card border border-dashed border-border text-dim hover:border-accent hover:text-text transition-colors flex items-center justify-center gap-2 text-sm"
+          className="w-full p-4 rounded-xl bg-card border border-dashed border-border text-dim hover:border-accent hover:text-text transition-colors flex flex-col items-center gap-1 text-sm"
         >
-          <Upload size={16} /> 上传 .pptx / .pdf / .docx（≤10MB）
+          <Upload size={16} />
+          <span>上传 .pptx / .pdf / .docx 或图片截图</span>
+          <span className="text-xs text-muted">文档 ≤10MB · 图片 ≤5MB</span>
         </button>
       )}
 
@@ -185,20 +213,22 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
             {phase.stage === 'extracting' && (
               <>
                 <div className="text-text truncate">{phase.name}</div>
-                <div className="text-xs text-dim">正在抽取文本…</div>
+                <div className="text-xs text-dim">
+                  {phase.kind === 'image' ? '正在读取图片…' : '正在抽取文本…'}
+                </div>
               </>
             )}
             {phase.stage === 'parsing' && (
               <>
                 <div className="text-text truncate">{phase.name}</div>
                 <div className="text-xs text-dim">
-                  {phase.chars.toLocaleString()} 字符，发给 Claude 解析中…
+                  {phase.kind === 'image'
+                    ? `图片已编码（${Math.round(phase.chars / 1024)}KB base64），Claude vision 识别中…`
+                    : `${phase.chars.toLocaleString()} 字符，发给 Claude 解析中…`}
                 </div>
               </>
             )}
-            {phase.stage === 'saving' && (
-              <div className="text-text">保存中…</div>
-            )}
+            {phase.stage === 'saving' && <div className="text-text">保存中…</div>}
           </div>
         </div>
       )}
@@ -211,7 +241,11 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
         <>
           <div className="flex items-center justify-between gap-2">
             <div className="text-xs text-dim flex items-center gap-1 min-w-0">
-              <FileText size={12} className="shrink-0" />
+              {phase.kind === 'image' ? (
+                <ImageIcon size={12} className="shrink-0" />
+              ) : (
+                <FileText size={12} className="shrink-0" />
+              )}
               <span className="truncate">{phase.name}</span>
               <span className="shrink-0">· {candidates.length} 条</span>
             </div>

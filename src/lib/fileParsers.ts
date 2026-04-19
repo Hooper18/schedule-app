@@ -7,8 +7,10 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 export type FileKind = 'pptx' | 'pdf' | 'docx'
+export type ImportKind = FileKind | 'image'
 
-export const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+export const MAX_DOC_SIZE = 10 * 1024 * 1024 // 10 MB for pptx/pdf/docx
+export const MAX_IMAGE_SIZE = 5 * 1024 * 1024 // 5 MB for images (Anthropic cap)
 
 export interface ExtractResult {
   kind: FileKind
@@ -16,28 +18,58 @@ export interface ExtractResult {
   pageCount: number
 }
 
-function classify(file: File): FileKind | null {
-  const name = file.name.toLowerCase()
+export interface ImageResult {
+  base64: string
+  mediaType: string
+}
+
+const IMAGE_EXT_TO_MEDIA: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+
+function docKind(name: string): FileKind | null {
   if (name.endsWith('.pptx')) return 'pptx'
   if (name.endsWith('.pdf')) return 'pdf'
   if (name.endsWith('.docx')) return 'docx'
-  // Old .ppt / .doc are NOT supported — they're binary formats the browser libs can't read.
+  return null
+}
+
+function imageMediaType(name: string): string | null {
+  const m = name.match(/\.(png|jpe?g|webp|gif)$/)
+  if (!m) return null
+  return IMAGE_EXT_TO_MEDIA[m[1]] ?? null
+}
+
+export function classifyFile(file: File): ImportKind | null {
+  const n = file.name.toLowerCase()
+  const dk = docKind(n)
+  if (dk) return dk
+  if (imageMediaType(n)) return 'image'
   return null
 }
 
 export function isSupported(file: File): boolean {
-  return classify(file) !== null
+  return classifyFile(file) !== null
+}
+
+export function checkSize(file: File, kind: ImportKind): string | null {
+  const limit = kind === 'image' ? MAX_IMAGE_SIZE : MAX_DOC_SIZE
+  if (file.size > limit) {
+    return `文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB，${kind === 'image' ? '图片' : '文档'}上限 ${limit / 1024 / 1024}MB`
+  }
+  return null
 }
 
 export async function extractText(file: File): Promise<ExtractResult> {
-  if (file.size > MAX_FILE_SIZE) {
-    throw new Error(
-      `文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB，上限 ${MAX_FILE_SIZE / 1024 / 1024}MB`,
-    )
-  }
-  const kind = classify(file)
+  const sizeErr = checkSize(file, docKind(file.name.toLowerCase()) ?? 'image')
+  if (sizeErr) throw new Error(sizeErr)
+  const kind = docKind(file.name.toLowerCase())
   if (!kind) {
-    throw new Error('不支持的格式：只接受 .pptx / .pdf / .docx')
+    throw new Error('不支持的格式：文档只接受 .pptx / .pdf / .docx')
   }
   const buf = await file.arrayBuffer()
   switch (kind) {
@@ -48,6 +80,24 @@ export async function extractText(file: File): Promise<ExtractResult> {
     case 'docx':
       return extractDocx(buf)
   }
+}
+
+export async function readImage(file: File): Promise<ImageResult> {
+  const sizeErr = checkSize(file, 'image')
+  if (sizeErr) throw new Error(sizeErr)
+  const mediaType = imageMediaType(file.name.toLowerCase())
+  if (!mediaType) {
+    throw new Error('不支持的图片格式：.png / .jpg / .jpeg / .webp / .gif')
+  }
+  const buf = await file.arrayBuffer()
+  const bytes = new Uint8Array(buf)
+  // Avoid stack overflow for large arrays — chunk into 32KB strings then btoa.
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return { base64: btoa(binary), mediaType }
 }
 
 async function extractPptx(buf: ArrayBuffer): Promise<ExtractResult> {
@@ -113,8 +163,11 @@ function decodeXml(s: string): string {
     .replace(/&amp;/g, '&')
 }
 
-export function sourceFor(kind: FileKind): 'ppt_import' | 'pdf_import' | 'docx_import' {
+export function sourceFor(
+  kind: ImportKind,
+): 'ppt_import' | 'pdf_import' | 'docx_import' | 'photo_import' {
   if (kind === 'pptx') return 'ppt_import'
   if (kind === 'pdf') return 'pdf_import'
-  return 'docx_import'
+  if (kind === 'docx') return 'docx_import'
+  return 'photo_import'
 }

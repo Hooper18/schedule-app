@@ -80,11 +80,101 @@ interface RequestBody {
   courses?: unknown
   today?: unknown
   semester_week1_start?: unknown
-  action?: unknown // "quick_add" (default) | "file_import"
-  file_type?: unknown // "pptx" | "pdf" | "docx" — only for file_import
+  action?: unknown // "quick_add" (default) | "file_import" | "course_import"
+  file_type?: unknown // "pptx" | "pdf" | "docx" | "image" — only for file_import
+  image_base64?: unknown // required when file_type === "image"
+  image_media_type?: unknown // "image/png" | "image/jpeg" — required when file_type === "image"
+  academic_calendar?: unknown // array of {title, date, end_date?, type} — optional DB context
 }
 
-type Action = "quick_add" | "file_import"
+type Action = "quick_add" | "file_import" | "course_import"
+
+interface AcademicCalendarRef {
+  title: string
+  date: string
+  end_date: string | null
+  type: string
+}
+
+// ---- record_courses tool for course_import action ----------------------
+// Output schema matches the shape we'll insert into public.courses +
+// public.weekly_schedule. Sessions are nested per course so the UI can
+// render/edit them grouped.
+const recordCoursesTool = {
+  name: "record_courses",
+  description:
+    "Record every course parsed from the pasted student timetable. Always call this exactly once — return an empty courses array if nothing parseable was present.",
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      courses: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            code: { type: "string", description: "Course code, e.g. COM112" },
+            name: {
+              type: "string",
+              description: "Short course name / subject title",
+            },
+            name_full: {
+              type: ["string", "null"],
+              description: "Full course name if shown verbatim",
+            },
+            credit: { type: ["integer", "null"] },
+            lecturer: { type: ["string", "null"] },
+            sessions: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  day_of_week: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 6,
+                    description: "0=Sunday … 6=Saturday",
+                  },
+                  start_time: {
+                    type: "string",
+                    description: "24h HH:MM",
+                  },
+                  end_time: {
+                    type: "string",
+                    description: "24h HH:MM",
+                  },
+                  type: {
+                    type: "string",
+                    enum: ["lecture", "tutorial", "lab", "practical", "seminar", "other"],
+                  },
+                  location: { type: ["string", "null"] },
+                  group_number: { type: ["string", "null"] },
+                  teaching_weeks: {
+                    type: ["string", "null"],
+                    description: "e.g. '1-14' or '1-7,9-14'",
+                  },
+                },
+                required: [
+                  "day_of_week",
+                  "start_time",
+                  "end_time",
+                  "type",
+                  "location",
+                  "group_number",
+                  "teaching_weeks",
+                ],
+              },
+            },
+          },
+          required: ["code", "name", "name_full", "credit", "lecturer", "sessions"],
+        },
+      },
+    },
+    required: ["courses"],
+  },
+}
 
 const recordEventsTool = {
   name: "record_events",
@@ -233,11 +323,22 @@ Other guidelines:
 - Always call record_events exactly once — return an empty events array if nothing actionable.`
 }
 
-// File-import prompt — input is the full extracted text of an uploaded
-// course document (pptx/pdf/docx). Reuses the record_events tool and the
-// same date anchor logic; differs in framing and extraction guidance.
+function formatAcademicCalendar(cal: AcademicCalendarRef[]): string {
+  if (!cal.length) return "(no academic calendar provided)"
+  return cal
+    .map((c) => {
+      const range = c.end_date && c.end_date !== c.date ? `${c.date} → ${c.end_date}` : c.date
+      return `- [${c.type}] ${c.title}: ${range}`
+    })
+    .join("\n")
+}
+
+// File-import prompt — input is the full extracted text (or image) of an
+// uploaded course document. Reuses the record_events tool and the same
+// date anchor logic; adds semester/holiday context from academic_calendar.
 function buildFileImportSystemPrompt(
   courses: CourseRef[],
+  academicCalendar: AcademicCalendarRef[],
   today: string,
   week1Start: string | null,
   fileType: string | null,
@@ -252,6 +353,7 @@ function buildFileImportSystemPrompt(
   const anchors = buildDateAnchors(todayDate)
   const tomorrow = formatIso(addDays(todayDate, 1))
   const dayAfter = formatIso(addDays(todayDate, 2))
+  const calendarText = formatAcademicCalendar(academicCalendar)
 
   const fileHint =
     fileType === "pptx"
@@ -260,9 +362,11 @@ function buildFileImportSystemPrompt(
         ? "The text was extracted from a PDF (likely a course outline or syllabus). Assessment summaries are often in tables — dates and weights may be in adjacent columns."
         : fileType === "docx"
           ? "The text was extracted from a Word document (likely a course outline or assignment brief)."
-          : "The text was extracted from a course file."
+          : fileType === "image"
+            ? "You are viewing a photo / screenshot of a course material (syllabus page, assessment plan slide, timetable). Read every visible piece of scheduling information."
+            : "The content is from a course file."
 
-  return `You are analysing the extracted text of a course file and must extract EVERY scheduling event into a structured list. ${fileHint}
+  return `You are analysing a course file and must extract EVERY scheduling event into a structured list. ${fileHint}
 
 今天是 ${humanCn}，${CN_WEEKDAYS[wd]}（${EN_WEEKDAYS[wd]}）。
 Today: ${today} (${EN_WEEKDAYS[wd]}).${week1Start ? `\nSemester Week 1 starts: ${week1Start}` : ""}
@@ -272,9 +376,13 @@ ${anchors}
   明天 / tomorrow = ${tomorrow}
   后天 / day after tomorrow = ${dayAfter}
 
+Academic calendar for this semester:
+${calendarText}
+
 Date rules:
 - Prefer absolute dates written in the document. Convert any format to YYYY-MM-DD.
 - If the document only says "Week N" (teaching week), compute as semester week1_start + 7*(N-1) days. If week1_start is unknown, leave date null.
+- Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly says so.
 - Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
 - Times use 24-hour HH:MM. "3pm" → "15:00".
 
@@ -296,6 +404,30 @@ Extraction guidelines:
 - Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
 - Do NOT include generic lecture sessions or weekly tutorials that lack specific dates.
 - Always call record_events exactly once.`
+}
+
+// Course-import prompt — input is pasted text from a student timetable
+// system (e.g. XMUM AC Online). Output maps to courses + weekly_schedule.
+function buildCourseImportSystemPrompt(): string {
+  return `You are parsing a pasted student timetable from a university academic system (commonly XMUM AC Online or similar). Produce a structured course list with recurring weekly sessions.
+
+Conventions:
+- day_of_week is integer: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday.
+- Times are 24-hour HH:MM. "9:00 AM" → "09:00". "2:30 PM" → "14:30".
+- "type" is one of: lecture, tutorial, lab, practical, seminar, other. If the timetable says LEC → lecture; TUT → tutorial; LAB → lab; PRAC/PRACTICAL → practical; SEM → seminar; otherwise "other".
+- group_number is the tutorial / lab group identifier if shown (e.g. "G1", "TG2", "A"). Null otherwise.
+- teaching_weeks is the weeks range string if given ("1-14", "1-7,9-14"). Default to "1-14" if not specified.
+- credit: integer credit hours if shown; null otherwise.
+- name_full: the unabbreviated course title if shown; null otherwise.
+- lecturer: the instructor's name if shown; null otherwise.
+
+Extraction rules:
+- ONE entry per course code. Merge all sessions for the same course into its sessions[] array.
+- Do NOT skip sessions even if they share a code — a lecture at Mon 09:00 and a tutorial at Wed 14:00 for COM112 → two entries under the same course's sessions[].
+- If a course appears with different group numbers for lecture vs tutorial, keep both as separate sessions with their group numbers.
+- Normalize course codes (trim whitespace, uppercase). Do NOT invent missing codes.
+- If no courses can be parsed, return an empty courses array.
+- Always call record_courses exactly once.`
 }
 
 async function verifyUser(
@@ -393,13 +525,39 @@ Deno.serve(async (req) => {
     return jsonError(400, "parse_body", `Invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  const input = body.input
-  if (typeof input !== "string" || !input.trim()) {
+  // action defaults to quick_add for backwards compat with existing callers.
+  const actionRaw = body.action
+  let action: Action = "quick_add"
+  if (typeof actionRaw === "string") {
+    if (
+      actionRaw === "quick_add" ||
+      actionRaw === "file_import" ||
+      actionRaw === "course_import"
+    ) {
+      action = actionRaw
+    } else {
+      return jsonError(
+        400,
+        "validate_input",
+        `'action' must be 'quick_add' | 'file_import' | 'course_import', got '${actionRaw}'`,
+      )
+    }
+  }
+
+  const fileType =
+    typeof body.file_type === "string" ? body.file_type : null
+
+  // For file_import with an image, input may be empty (caption optional);
+  // otherwise input is required.
+  const rawInput = typeof body.input === "string" ? body.input : ""
+  const isImageImport =
+    action === "file_import" && fileType === "image"
+  if (!isImageImport && !rawInput.trim()) {
     return jsonError(400, "validate_input", "'input' must be a non-empty string", {
-      received_type: typeof input,
-      received_value: input === undefined ? "undefined" : null,
+      received_type: typeof body.input,
     })
   }
+  const input = rawInput
 
   const rawCourses = Array.isArray(body.courses) ? body.courses : []
   const courses: CourseRef[] = rawCourses
@@ -412,6 +570,25 @@ Deno.serve(async (req) => {
     )
     .map((c) => ({ id: c.id, code: c.code, name: c.name }))
 
+  const rawCalendar = Array.isArray(body.academic_calendar)
+    ? body.academic_calendar
+    : []
+  const academicCalendar: AcademicCalendarRef[] = rawCalendar
+    .filter(
+      (c): c is AcademicCalendarRef =>
+        !!c &&
+        typeof (c as AcademicCalendarRef).title === "string" &&
+        typeof (c as AcademicCalendarRef).date === "string" &&
+        typeof (c as AcademicCalendarRef).type === "string",
+    )
+    .map((c) => ({
+      title: c.title,
+      date: c.date,
+      end_date:
+        typeof c.end_date === "string" && c.end_date ? c.end_date : null,
+      type: c.type,
+    }))
+
   const today =
     typeof body.today === "string"
       ? body.today
@@ -421,34 +598,79 @@ Deno.serve(async (req) => {
       ? body.semester_week1_start
       : null
 
-  // action defaults to quick_add for backwards compat with existing callers.
-  const actionRaw = body.action
-  let action: Action = "quick_add"
-  if (typeof actionRaw === "string") {
-    if (actionRaw === "quick_add" || actionRaw === "file_import") {
-      action = actionRaw
-    } else {
+  // Build user message content. For image imports, wrap the base64 payload
+  // as an image content block; Claude Haiku 4.5 supports vision.
+  let userContent: Anthropic.Messages.MessageParam["content"]
+  if (isImageImport) {
+    const b64 = body.image_base64
+    const mediaType = body.image_media_type
+    if (typeof b64 !== "string" || !b64) {
       return jsonError(
         400,
         "validate_input",
-        `'action' must be 'quick_add' or 'file_import', got '${actionRaw}'`,
+        "file_type=image requires 'image_base64' string",
       )
     }
+    if (
+      typeof mediaType !== "string" ||
+      !/^image\/(png|jpeg|jpg|webp|gif)$/i.test(mediaType)
+    ) {
+      return jsonError(
+        400,
+        "validate_input",
+        "file_type=image requires a valid 'image_media_type' (image/png | image/jpeg | image/webp | image/gif)",
+      )
+    }
+    const normalizedMedia = mediaType.toLowerCase().replace("jpg", "jpeg") as
+      | "image/png"
+      | "image/jpeg"
+      | "image/webp"
+      | "image/gif"
+    const imageBlock = {
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        media_type: normalizedMedia,
+        data: b64,
+      },
+    }
+    userContent = input.trim()
+      ? [imageBlock, { type: "text" as const, text: input }]
+      : [imageBlock]
+  } else {
+    userContent = input
   }
 
-  const fileType =
-    typeof body.file_type === "string" ? body.file_type : null
-
-  // file_import payloads are typically larger (a full syllabus) and may
-  // produce many events, so give it more room than quick_add.
-  const systemPrompt =
-    action === "file_import"
-      ? buildFileImportSystemPrompt(courses, today, week1Start, fileType)
-      : buildSystemPrompt(courses, today, week1Start)
-  const maxTokens = action === "file_import" ? 8192 : 4096
+  let systemPrompt: string
+  let tool: typeof recordEventsTool | typeof recordCoursesTool
+  let forcedToolName: string
+  let maxTokens: number
+  if (action === "file_import") {
+    systemPrompt = buildFileImportSystemPrompt(
+      courses,
+      academicCalendar,
+      today,
+      week1Start,
+      fileType,
+    )
+    tool = recordEventsTool
+    forcedToolName = "record_events"
+    maxTokens = 8192
+  } else if (action === "course_import") {
+    systemPrompt = buildCourseImportSystemPrompt()
+    tool = recordCoursesTool
+    forcedToolName = "record_courses"
+    maxTokens = 8192
+  } else {
+    // quick_add — unchanged path
+    systemPrompt = buildSystemPrompt(courses, today, week1Start)
+    tool = recordEventsTool
+    forcedToolName = "record_events"
+    maxTokens = 4096
+  }
 
   console.log(
-    `[claude-proxy] user=${userId} action=${action} input_len=${input.length} courses=${courses.length} today=${today}`,
+    `[claude-proxy] user=${userId} action=${action} file_type=${fileType ?? "-"} input_len=${input.length} image=${isImageImport} courses=${courses.length} cal=${academicCalendar.length} today=${today}`,
   )
 
   try {
@@ -459,9 +681,9 @@ Deno.serve(async (req) => {
       model: "claude-haiku-4-5-20251001",
       max_tokens: maxTokens,
       system: systemPrompt,
-      tools: [recordEventsTool],
-      tool_choice: { type: "tool", name: "record_events" },
-      messages: [{ role: "user", content: input }],
+      tools: [tool],
+      tool_choice: { type: "tool", name: forcedToolName },
+      messages: [{ role: "user", content: userContent }],
     })
 
     const toolUse = response.content.find((b) => b.type === "tool_use")
