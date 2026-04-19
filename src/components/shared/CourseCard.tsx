@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Pencil } from 'lucide-react'
 import type { Course } from '../../lib/types'
 import { formatShortDate, getDaysUntil } from '../../lib/utils'
 
@@ -7,14 +7,15 @@ interface Props {
   pendingCount: number
   nextDeadline?: { title: string; date: string | null } | null
   onClick: () => void
+  onEdit?: (course: Course) => void
 }
 
-export default function CourseCard({ course, pendingCount, nextDeadline, onClick }: Props) {
+export default function CourseCard({ course, pendingCount, nextDeadline, onClick, onEdit }: Props) {
   const days = getDaysUntil(nextDeadline?.date)
   return (
-    <button
+    <div
       onClick={onClick}
-      className="w-full text-left p-4 rounded-xl bg-card border border-border hover:bg-hover transition-colors flex gap-3 items-start"
+      className="w-full text-left p-4 rounded-xl bg-card border border-border hover:bg-hover transition-colors flex gap-3 items-start cursor-pointer"
     >
       <div
         className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0"
@@ -45,7 +46,22 @@ export default function CourseCard({ course, pendingCount, nextDeadline, onClick
           )}
         </div>
       </div>
-      <ChevronRight size={18} className="text-muted shrink-0 mt-1" />
-    </button>
+      <div className="flex items-center gap-0.5 shrink-0 mt-1">
+        {onEdit && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onEdit(course)
+            }}
+            className="p-1.5 rounded hover:bg-main text-muted hover:text-text"
+            aria-label="编辑课程"
+          >
+            <Pencil size={14} />
+          </button>
+        )}
+        <ChevronRight size={18} className="text-muted" />
+      </div>
+    </div>
   )
 }
