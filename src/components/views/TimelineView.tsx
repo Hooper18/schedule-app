@@ -3,6 +3,7 @@ import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
 import EventCard from '../shared/EventCard'
+import EventModal from '../shared/EventModal'
 import FilterBar from '../shared/FilterBar'
 import type { Event, EventType } from '../../lib/types'
 
@@ -21,9 +22,10 @@ const FILTERS: { value: Filter; label: string; types: EventType[] | null }[] = [
 export default function TimelineView() {
   const { semester } = useSemester()
   const { courses } = useCourses(semester?.id)
-  const { events, loading, setStatus } = useEvents(semester?.id)
+  const { events, loading, setStatus, reload } = useEvents(semester?.id)
   const [filter, setFilter] = useState<Filter>('all')
   const [showDone, setShowDone] = useState(false)
+  const [editing, setEditing] = useState<Event | null>(null)
 
   const courseMap = useMemo(
     () => Object.fromEntries(courses.map((c) => [c.id, c])),
@@ -93,6 +95,7 @@ export default function TimelineView() {
                   course={e.course_id ? courseMap[e.course_id] : undefined}
                   semester={semester}
                   onToggle={setStatus}
+                  onEdit={setEditing}
                 />
               ))}
             </div>
@@ -112,6 +115,7 @@ export default function TimelineView() {
                   course={e.course_id ? courseMap[e.course_id] : undefined}
                   semester={semester}
                   onToggle={setStatus}
+                  onEdit={setEditing}
                 />
               ))}
             </div>
@@ -122,6 +126,13 @@ export default function TimelineView() {
           <div className="py-16 text-center text-dim">没有事件</div>
         )}
       </div>
+
+      <EventModal
+        event={editing}
+        courses={courses}
+        onClose={() => setEditing(null)}
+        onSaved={reload}
+      />
     </>
   )
 }

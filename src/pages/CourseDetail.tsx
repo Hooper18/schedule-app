@@ -1,8 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Mail, Phone, MapPin } from 'lucide-react'
 import Layout from '../components/layout/Layout'
 import EventCard from '../components/shared/EventCard'
+import EventModal from '../components/shared/EventModal'
+import type { Event } from '../lib/types'
 import { useSemester } from '../hooks/useSemester'
 import { useCourses } from '../hooks/useCourses'
 import { useEvents } from '../hooks/useEvents'
@@ -12,7 +14,8 @@ export default function CourseDetail() {
   const navigate = useNavigate()
   const { semester } = useSemester()
   const { courses } = useCourses(semester?.id)
-  const { events, setStatus } = useEvents(semester?.id)
+  const { events, setStatus, reload } = useEvents(semester?.id)
+  const [editing, setEditing] = useState<Event | null>(null)
 
   const course = useMemo(() => courses.find((c) => c.id === id), [courses, id])
   const courseEvents = useMemo(
@@ -140,6 +143,7 @@ export default function CourseDetail() {
                   course={course}
                   semester={semester}
                   onToggle={setStatus}
+                  onEdit={setEditing}
                 />
               ))}
             </div>
@@ -182,6 +186,13 @@ export default function CourseDetail() {
           </section>
         )}
       </div>
+
+      <EventModal
+        event={editing}
+        courses={courses}
+        onClose={() => setEditing(null)}
+        onSaved={reload}
+      />
     </Layout>
   )
 }

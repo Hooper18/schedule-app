@@ -1,4 +1,4 @@
-import { Check, Undo2, Users, Trash2 } from 'lucide-react'
+import { Check, Undo2, Users, Pencil } from 'lucide-react'
 import type { Event, Course, Semester } from '../../lib/types'
 import {
   formatShortDate,
@@ -13,10 +13,10 @@ interface Props {
   course?: Course
   semester: Semester | null
   onToggle: (id: string, next: 'pending' | 'completed') => void
-  onDelete?: (id: string) => void
+  onEdit?: (event: Event) => void
 }
 
-export default function EventCard({ event, course, semester, onToggle, onDelete }: Props) {
+export default function EventCard({ event, course, semester, onToggle, onEdit }: Props) {
   const done = event.status === 'completed'
   const days = getDaysUntil(event.date)
   const wk = event.week_number ?? (event.date ? weekNumber(event.date, semester) : null)
@@ -30,15 +30,22 @@ export default function EventCard({ event, course, semester, onToggle, onDelete 
           ? `${days}d`
           : `${-days}d ago`
 
+  const clickable = !!onEdit
+
   return (
     <div
+      onClick={clickable ? () => onEdit!(event) : undefined}
       className={`p-3 rounded-xl bg-card border border-border transition-opacity ${
         done ? 'opacity-50' : ''
-      }`}
+      } ${clickable ? 'cursor-pointer hover:bg-hover' : ''}`}
     >
       <div className="flex items-start gap-3">
         <button
-          onClick={() => onToggle(event.id, done ? 'pending' : 'completed')}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggle(event.id, done ? 'pending' : 'completed')
+          }}
           aria-label={done ? '标记未完成' : '标记完成'}
           className={`mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
             done
@@ -103,27 +110,27 @@ export default function EventCard({ event, course, semester, onToggle, onDelete 
             )}
           </div>
 
-          {event.notes && <div className="mt-1 text-xs text-dim">{event.notes}</div>}
+          {event.notes && <div className="mt-1 text-xs text-dim line-clamp-2">{event.notes}</div>}
         </div>
 
         <div className="flex items-center gap-1">
           {done && (
             <button
-              onClick={() => onToggle(event.id, 'pending')}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggle(event.id, 'pending')
+              }}
               aria-label="撤销完成"
               className="p-1.5 rounded hover:bg-hover text-muted"
             >
               <Undo2 size={14} />
             </button>
           )}
-          {onDelete && (
-            <button
-              onClick={() => onDelete(event.id)}
-              aria-label="删除"
-              className="p-1.5 rounded hover:bg-hover text-muted hover:text-red-500"
-            >
-              <Trash2 size={14} />
-            </button>
+          {clickable && (
+            <span className="p-1.5 text-muted" aria-hidden>
+              <Pencil size={14} />
+            </span>
           )}
         </div>
       </div>
