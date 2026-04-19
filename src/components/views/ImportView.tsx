@@ -1,15 +1,18 @@
 import { useState } from 'react'
-import { Sparkles, Upload, Plus } from 'lucide-react'
+import { Upload, Plus } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
+import { useEvents } from '../../hooks/useEvents'
 import AddEventForm from './import/AddEventForm'
 import AddCourseForm from './import/AddCourseForm'
+import QuickAddPanel from './import/QuickAddPanel'
 
 type Tab = 'event' | 'course'
 
 export default function ImportView() {
   const { semester } = useSemester()
   const { courses, reload: reloadCourses } = useCourses(semester?.id)
+  const { reload: reloadEvents } = useEvents(semester?.id)
   const [tab, setTab] = useState<Tab>('event')
 
   if (!semester) {
@@ -23,14 +26,11 @@ export default function ImportView() {
 
   return (
     <div className="p-4 space-y-4">
-      <div className="p-3 rounded-xl bg-card border border-border flex items-center gap-2 text-dim opacity-60">
-        <Sparkles size={16} className="text-accent" />
-        <input
-          disabled
-          placeholder="快速添加 (Phase 2 接入 Claude)"
-          className="flex-1 bg-transparent text-sm focus:outline-none"
-        />
-      </div>
+      <QuickAddPanel
+        semester={semester}
+        courses={courses}
+        onSaved={reloadEvents}
+      />
 
       <button
         disabled
