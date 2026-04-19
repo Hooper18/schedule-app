@@ -59,7 +59,7 @@ export default function CalendarView() {
 
   if (mode === 'day') {
     return (
-      <>
+      <div className="h-full overflow-y-auto no-scrollbar">
         <DayView
           date={selected}
           events={selectedEvents}
@@ -78,14 +78,14 @@ export default function CalendarView() {
           onClose={() => setEditing(null)}
           onSaved={reload}
         />
-      </>
+      </div>
     )
   }
 
   return (
-    <>
-      {/* Sticky top: month controls + grid (stays visible while events scroll) */}
-      <div className="sticky top-14 z-10 bg-main border-b border-border">
+    <div className="h-full flex flex-col">
+      {/* Month controls + grid — fixed (does NOT scroll) */}
+      <div className="shrink-0 bg-main border-b border-border">
         <div className="flex items-center justify-center gap-2 px-4 py-3">
           <button
             onClick={() => setCursor((c) => addMonths(c, -1))}
@@ -116,8 +116,8 @@ export default function CalendarView() {
         />
       </div>
 
-      {/* Events for selected day (scrolls with page) */}
-      <div className="p-4 space-y-3">
+      {/* Events for selected day — scrolls independently, no visible scrollbar */}
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-3 pb-24">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-semibold text-text">
@@ -164,7 +164,7 @@ export default function CalendarView() {
         onClose={() => setEditing(null)}
         onSaved={reload}
       />
-    </>
+    </div>
   )
 }
 

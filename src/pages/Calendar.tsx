@@ -3,7 +3,7 @@ import CalendarView from '../components/views/CalendarView'
 
 export default function CalendarPage() {
   return (
-    <Layout title="Calendar">
+    <Layout title="Calendar" fixedHeight>
       <CalendarView />
     </Layout>
   )
