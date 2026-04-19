@@ -201,6 +201,17 @@ const recordEventsTool = {
             weight: { type: ["string", "null"] },
             is_group: { type: "boolean" },
             notes: { type: ["string", "null"] },
+            // file_import sets these; quick_add may omit them (optional).
+            date_inferred: {
+              type: "boolean",
+              description:
+                "true only when the date was computed from a Week-N reference or an academic-calendar anchor (e.g. 'Final Exam' → exam week start). false when the source contains an explicit calendar date. Omit/false when date is null.",
+            },
+            date_source: {
+              type: ["string", "null"],
+              description:
+                "Short label of the original reference that produced an inferred date, e.g. 'Week 13', 'Week 5 Friday', 'Examination Week'. Null when date_inferred is false.",
+            },
           },
           required: [
             "course_id",
@@ -410,6 +421,13 @@ Extraction guidelines:
   - is_group: true ONLY if the text explicitly says group / team / 小组 / pair.
   - course_id: UUID from the course list above. Try to match the document's course code (e.g. "COM112") to an entry — match on code case-insensitively. Leave null if no confident match.
   - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. Do NOT use notes to carry other assessments' weights — each weighted item has its own event.
+  - date_inferred (REQUIRED on every event, even when date is null): boolean.
+      * true when you computed the date from a Week-N reference, or from an academic-calendar anchor such as "Final Exam" → examination week start.
+      * false when the document contains an explicit calendar date (e.g. "22 MAY 2026", "Week 3 · May 22 2026" — because the explicit date is present).
+      * false when date is null (no inference was performed).
+  - date_source (REQUIRED on every event; null unless date_inferred is true): string or null.
+      * When date_inferred=true, put a short label of the original reference that produced the date: "Week 13", "Week 5 Friday", "Examination Week", "Revision Week".
+      * Otherwise null.
 - Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
 - Always call record_events exactly once.`
 }

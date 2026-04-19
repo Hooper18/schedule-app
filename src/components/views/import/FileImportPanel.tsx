@@ -8,6 +8,7 @@ import {
   Loader2,
   Image as ImageIcon,
   Plus,
+  AlertTriangle,
 } from 'lucide-react'
 import { useClaude, type ParsedEvent } from '../../../hooks/useClaude'
 import { useCalendar } from '../../../hooks/useCalendar'
@@ -479,8 +480,13 @@ interface CardProps {
 }
 
 function FileCandidateCard({ value, courses, onChange, onRemove }: CardProps) {
+  const inferred = value.date_inferred === true && !!value.date
   return (
-    <div className="p-3 rounded-xl bg-card border border-border space-y-2">
+    <div
+      className={`p-3 rounded-xl bg-card border space-y-2 ${
+        inferred ? 'border-amber-500/40' : 'border-border'
+      }`}
+    >
       <div className="flex items-start gap-2">
         <input
           value={value.title}
@@ -523,12 +529,28 @@ function FileCandidateCard({ value, courses, onChange, onRemove }: CardProps) {
           ))}
         </select>
 
-        <input
-          type="date"
-          value={value.date ?? ''}
-          onChange={(e) => onChange({ date: e.target.value || null })}
-          className={inputCls}
-        />
+        <div className="relative">
+          <input
+            type="date"
+            value={value.date ?? ''}
+            onChange={(e) =>
+              onChange({
+                date: e.target.value || null,
+                // User-edited dates are no longer inferred.
+                date_inferred: false,
+                date_source: null,
+              })
+            }
+            className={`${inputCls} ${inferred ? 'pr-7 border-amber-500/60' : ''}`}
+          />
+          {inferred && (
+            <AlertTriangle
+              size={12}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-amber-500 pointer-events-none"
+              aria-label="日期从周数推断"
+            />
+          )}
+        </div>
         <input
           type="time"
           value={value.time ?? ''}
@@ -551,6 +573,19 @@ function FileCandidateCard({ value, courses, onChange, onRemove }: CardProps) {
           Group
         </label>
       </div>
+
+      {inferred && (
+        <div className="flex items-center gap-1 text-[11px] text-amber-600">
+          <AlertTriangle size={10} className="shrink-0" />
+          <span>
+            日期由 Claude 推断自
+            <span className="italic">
+              {value.date_source ? ` "${value.date_source}"` : ' 周数引用'}
+            </span>
+            ，请核对
+          </span>
+        </div>
+      )}
 
       {value.notes && (
         <textarea

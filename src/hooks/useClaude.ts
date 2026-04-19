@@ -13,6 +13,9 @@ export interface ParsedEvent {
   weight: string | null
   is_group: boolean
   notes: string | null
+  // file_import sets these; quick_add omits them.
+  date_inferred?: boolean
+  date_source?: string | null
 }
 
 export interface ParsedCourseSession {
