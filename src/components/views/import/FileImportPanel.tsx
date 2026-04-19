@@ -259,7 +259,7 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
     setPhase({ stage: 'saving', files, primaryKind })
     setLocalErr(null)
 
-    const rows = candidates.map((c) => ({
+    const rawRows = candidates.map((c) => ({
       user_id: user.id,
       semester_id: semester.id,
       course_id: c.course_id,
@@ -276,13 +276,34 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       date_inferred: c.date_inferred === true,
       date_source: c.date_source ?? null,
     }))
-    const { error } = await supabase.from('events').insert(rows)
+
+    // Dedup within this batch — Postgres rejects "ON CONFLICT DO UPDATE"
+    // that touches the same row twice in a single statement. Keep the
+    // first occurrence when the conflict key collides.
+    const seen = new Set<string>()
+    const rows: typeof rawRows = []
+    for (const r of rawRows) {
+      const key = `${r.user_id}|${r.course_id ?? ''}|${r.title}|${r.date ?? ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push(r)
+    }
+
+    const { error } = await supabase
+      .from('events')
+      .upsert(rows, {
+        onConflict: 'user_id,course_id,title,date',
+        ignoreDuplicates: false,
+      })
     if (error) {
       setLocalErr(error.message)
       setPhase({ stage: 'review', files, primaryKind })
       return
     }
-    setOkMsg(`已从 ${files.length} 个文件导入 ${rows.length} 条事件。`)
+    const dup = rawRows.length - rows.length
+    setOkMsg(
+      `已从 ${files.length} 个文件处理 ${rows.length} 条事件${dup > 0 ? `（批内去重 ${dup} 条）` : ''}，重复的按 (课程 + 标题 + 日期) 覆盖。`,
+    )
     setCandidates([])
     reset()
     onSaved()

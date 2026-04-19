@@ -344,6 +344,30 @@ function formatAcademicCalendar(cal: AcademicCalendarRef[]): string {
     .join("\n")
 }
 
+// Extract the type=teaching rows into a tight lookup table so Claude never
+// has to compute Week N dates on its own — it just reads the table.
+function formatTeachingWeekTable(cal: AcademicCalendarRef[]): string {
+  const rows = cal
+    .filter((c) => c.type === "teaching")
+    .map((c) => {
+      const m = c.title.match(/Week\s+(\d+)/i)
+      const n = m ? parseInt(m[1], 10) : null
+      return {
+        n,
+        title: c.title,
+        start: c.date,
+        end: c.end_date ?? c.date,
+      }
+    })
+    .filter((r): r is { n: number; title: string; start: string; end: string } => r.n !== null)
+    .sort((a, b) => a.n - b.n)
+
+  if (rows.length === 0) return "(no teaching-week rows provided)"
+  return rows
+    .map((r) => `  Week ${r.n}: ${r.start} → ${r.end}`)
+    .join("\n")
+}
+
 // File-import prompt — input is the full extracted text (or image) of an
 // uploaded course document. Reuses the record_events tool and the same
 // date anchor logic; adds semester/holiday context from academic_calendar.
@@ -365,6 +389,7 @@ function buildFileImportSystemPrompt(
   const tomorrow = formatIso(addDays(todayDate, 1))
   const dayAfter = formatIso(addDays(todayDate, 2))
   const calendarText = formatAcademicCalendar(academicCalendar)
+  const weekTable = formatTeachingWeekTable(academicCalendar)
 
   const fileHint =
     fileType === "pptx"
@@ -390,17 +415,19 @@ ${anchors}
 Academic calendar for this semester:
 ${calendarText}
 
+== Teaching week lookup table (look up, DO NOT compute) ==
+${weekTable}
+
 Date rules:
-- Prefer absolute dates written in the document. Convert any format to YYYY-MM-DD.
-- "Week N" (teaching week) semantics: a week runs Monday–Sunday, anchored to semester week1_start (which is the Monday of Week 1, or the first teaching day — treat it as day 0 of Week 1).
-  • A deadline phrased as "Week N" (no weekday specified) → the LAST DAY of Week N, i.e. the Saturday of that week. Formula: week1_start + 7*(N-1) + 5 days.
-  • An event pinned to a specific weekday in Week N (e.g. "Week 5 Friday") → week1_start + 7*(N-1) + (weekday_offset) days.
-  • If week1_start is unknown (no "Semester Week 1 starts" line above), leave date null.
-- "Final Exam" / "Final Examination" without an explicit date → use the FIRST DAY of the examination week. Look up the academic calendar above for the row typed [exam] and use its start date. If no such row exists, leave date null.
-- "Midterm" without a date → leave date null (do NOT guess mid-semester); the user will fill it in.
-- Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly says so.
+- If the document contains an explicit absolute calendar date (e.g. "22 MAY 2026", "3 July 2026"), use it as-is. date_inferred=false.
+- If the document says "Week N" with NO specific weekday → read the end_date for that row in the lookup table above (the week's last day, i.e. the Saturday). NEVER compute this yourself. date_inferred=true, date_source="Week N".
+- If the document says "Week N <weekday>" (e.g. "Week 5 Friday") → use the matching weekday within Week N's date range from the lookup table. date_inferred=true, date_source="Week N <weekday>".
+- If Week N is NOT present in the lookup table (table shows "(no teaching-week rows provided)" or the specific week is missing), leave date=null. date_inferred=false.
+- "Final Exam" / "Final Examination" with no explicit date → use the FIRST DAY of the [exam] row in the academic calendar above. date_inferred=true, date_source="Examination Week". If there is no [exam] row, leave date null.
+- "Midterm" without an explicit date → leave date null (do NOT guess). date_inferred=false.
+- Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly places them there.
 - Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
-- If the document mentions no date and no "Week N" reference at all, leave date null. That is correct — do NOT invent a date.
+- If the document mentions no date AND no Week reference, leave date=null. date_inferred=false. Do NOT invent a date.
 - Times use 24-hour HH:MM. "3pm" → "15:00".
 
 Available courses (match course_code ↔ course_id from this list):
