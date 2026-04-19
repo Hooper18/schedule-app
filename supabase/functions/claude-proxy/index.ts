@@ -125,6 +125,63 @@ const recordEventsTool = {
   },
 }
 
+const CN_WEEKDAYS = [
+  "星期日",
+  "星期一",
+  "星期二",
+  "星期三",
+  "星期四",
+  "星期五",
+  "星期六",
+]
+const EN_WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+]
+const WEEK_SUFFIX_CN = ["一", "二", "三", "四", "五", "六", "日"]
+
+function parseIsoDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function formatIso(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d)
+  r.setDate(r.getDate() + n)
+  return r
+}
+
+// Build an explicit anchor table for the current and next ISO weeks
+// (Monday–Sunday). Injecting these pre-computed dates eliminates weekday
+// arithmetic mistakes (e.g. "下周三" being off by a week).
+function buildDateAnchors(today: Date): string {
+  // Monday-of-this-week offset: Sun→6, Mon→0, Tue→1, ...
+  const daysSinceMonday = (today.getDay() + 6) % 7
+  const thisMonday = addDays(today, -daysSinceMonday)
+  const nextMonday = addDays(thisMonday, 7)
+  const rows: string[] = []
+  for (let i = 0; i < 7; i++) {
+    const thisD = addDays(thisMonday, i)
+    const nextD = addDays(nextMonday, i)
+    rows.push(
+      `  本周${WEEK_SUFFIX_CN[i]} (this ${EN_WEEKDAYS[thisD.getDay()]}) = ${formatIso(thisD)}    下周${WEEK_SUFFIX_CN[i]} (next ${EN_WEEKDAYS[nextD.getDay()]}) = ${formatIso(nextD)}`,
+    )
+  }
+  return rows.join("\n")
+}
+
 function buildSystemPrompt(
   courses: CourseRef[],
   today: string,
@@ -133,21 +190,43 @@ function buildSystemPrompt(
   const courseList = courses.length
     ? courses.map((c) => `- ${c.code} (id: ${c.id}): ${c.name}`).join("\n")
     : "(no courses registered yet)"
+
+  const todayDate = parseIsoDate(today)
+  const wd = todayDate.getDay()
+  const humanCn = `${todayDate.getFullYear()}年${todayDate.getMonth() + 1}月${todayDate.getDate()}日`
+  const anchors = buildDateAnchors(todayDate)
+  const tomorrow = formatIso(addDays(todayDate, 1))
+  const dayAfter = formatIso(addDays(todayDate, 2))
+
   return `You are parsing natural-language scheduling notes for a student's course calendar and extracting structured events.
 
-Today: ${today}${week1Start ? `\nSemester Week 1 starts: ${week1Start}` : ""}
+今天是 ${humanCn}，${CN_WEEKDAYS[wd]}（${EN_WEEKDAYS[wd]}）。
+Today: ${today} (${EN_WEEKDAYS[wd]}).${week1Start ? `\nSemester Week 1 starts: ${week1Start}` : ""}
+
+== Date resolution anchors (pre-computed — DO NOT recompute, look these up) ==
+Weeks run Monday–Sunday. Today (${CN_WEEKDAYS[wd]}) sits inside 本周.
+${anchors}
+  明天 / tomorrow = ${tomorrow}
+  后天 / day after tomorrow = ${dayAfter}
+
+Date rules:
+- "下周X" / "next 星期X" ALWAYS means the weekday X in the 下周 column above — the week that begins on the UPCOMING Monday. NEVER the week after that.
+  Example: if today is 星期日 and today's 下周一 = M, then 下周三 = M + 2 days (look it up in the table).
+- "本周X" / "this 星期X" = the 本周 column above, even if that date is already in the past.
+- "next Wednesday" in English follows the same 下周 semantics above — it is the Wednesday in the week starting the upcoming Monday, not two weeks out.
+- Bare "周X" / weekday name with no 本/下 modifier = the nearest future occurrence (today itself if today matches).
+- "在 N 周内" / "in N weeks" = today + 7N days. "Week N" (relative to semester) = week1_start + 7(N−1) days.
+- Times use 24-hour HH:MM. "3pm" → "15:00". "下午 3 点" → "15:00".
 
 Available courses:
 ${courseList}
 
-Guidelines:
-- Resolve relative date references ("next friday", "in 2 weeks", "week 5") to absolute YYYY-MM-DD based on today.
-- Times use 24-hour HH:MM. "3pm" → "15:00".
+Other guidelines:
 - Match courses by code (case-insensitive); if no clear match, leave course_id null.
 - Pick the most specific event type. "Final" → exam. "Midterm" → midterm. "Lab report" → lab_report. "Video submission" → video_submission. Generic assignment due → deadline.
 - One entry per event when multiple are mentioned.
-- is_group=true only when the input explicitly says group/team.
-- Always call record_events exactly once, with an empty array if nothing actionable.`
+- is_group=true only when the input explicitly says group/team/小组.
+- Always call record_events exactly once — return an empty events array if nothing actionable.`
 }
 
 async function verifyUser(
