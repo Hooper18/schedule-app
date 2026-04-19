@@ -278,10 +278,13 @@ Deno.serve(async (req) => {
   )
 
   try {
+    // Note: adaptive thinking is incompatible with forced tool_choice on
+    // Opus 4.7 ("Thinking may not be enabled when tool_choice forces tool
+    // use"). We keep forced tool_choice for guaranteed structured output
+    // and drop thinking — the extraction task is simple enough without it.
     const response = await anthropic.messages.create({
       model: "claude-opus-4-7",
       max_tokens: 4096,
-      thinking: { type: "adaptive" },
       system: buildSystemPrompt(courses, today, week1Start),
       tools: [recordEventsTool],
       tool_choice: { type: "tool", name: "record_events" },
