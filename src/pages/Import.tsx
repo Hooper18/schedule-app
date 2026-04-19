@@ -1,4 +1,10 @@
 import Layout from '../components/layout/Layout'
+import ImportView from '../components/views/ImportView'
+
 export default function Import() {
-  return <Layout title="Add"><div className="p-6 text-dim">TBD</div></Layout>
+  return (
+    <Layout title="Add">
+      <ImportView />
+    </Layout>
+  )
 }
