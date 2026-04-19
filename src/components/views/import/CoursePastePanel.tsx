@@ -98,32 +98,114 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
     setSaving(true)
     setSaveErr(null)
 
-    const courseRows = candidates.map((c, idx) => ({
-      user_id: user.id,
-      semester_id: semester.id,
-      code: c.code,
-      name: c.name,
-      name_full: c.name_full ?? c.name,
-      lecturer: c.lecturer,
-      credit: c.credit,
-      color: PALETTE[idx % PALETTE.length],
-      sort_order: idx,
-    }))
-
-    const { data: inserted, error: insErr } = await supabase
+    // 1) Look up which candidate codes already exist for this user+semester
+    //    so we can UPDATE them instead of INSERTing (DB has a unique
+    //    constraint on user_id+semester_id+code+name_full).
+    const codes = candidates.map((c) => c.code)
+    const { data: existing, error: fetchErr } = await supabase
       .from('courses')
-      .insert(courseRows)
-      .select('id, code, name_full')
-    if (insErr) {
+      .select('id, code')
+      .eq('user_id', user.id)
+      .eq('semester_id', semester.id)
+      .in('code', codes)
+    if (fetchErr) {
       setSaving(false)
-      setSaveErr(`写入 courses 失败：${insErr.message}`)
+      setSaveErr(`查已有课程失败：${fetchErr.message}`)
       return
     }
+    const existingByCode = new Map<string, string>()
+    for (const row of existing ?? []) {
+      existingByCode.set(row.code as string, row.id as string)
+    }
 
-    // Map inserted rows back to their sessions via (code, name_full).
-    const byKey = new Map<string, string>()
-    for (const row of inserted ?? []) {
-      byKey.set(`${row.code}|${row.name_full ?? ''}`, row.id as string)
+    // 2) Partition into inserts (new codes) and updates (existing codes).
+    //    We keep sort_order/color stable on updates (don't overwrite user
+    //    color choices), only refresh name/name_full/credit/lecturer.
+    const toInsert: Array<{
+      user_id: string
+      semester_id: string
+      code: string
+      name: string
+      name_full: string
+      lecturer: string | null
+      credit: number | null
+      color: string
+      sort_order: number
+    }> = []
+    const toUpdate: Array<{
+      id: string
+      row: { name: string; name_full: string; lecturer: string | null; credit: number | null }
+    }> = []
+
+    candidates.forEach((c, idx) => {
+      const existingId = existingByCode.get(c.code)
+      const baseFields = {
+        name: c.name,
+        name_full: c.name_full ?? c.name,
+        lecturer: c.lecturer,
+        credit: c.credit,
+      }
+      if (existingId) {
+        toUpdate.push({ id: existingId, row: baseFields })
+      } else {
+        toInsert.push({
+          user_id: user.id,
+          semester_id: semester.id,
+          code: c.code,
+          ...baseFields,
+          color: PALETTE[idx % PALETTE.length],
+          sort_order: idx,
+        })
+      }
+    })
+
+    // 3) Batch INSERT new courses; collect their ids.
+    const codeToId = new Map<string, string>(existingByCode)
+    if (toInsert.length > 0) {
+      const { data: inserted, error: insErr } = await supabase
+        .from('courses')
+        .insert(toInsert)
+        .select('id, code')
+      if (insErr) {
+        setSaving(false)
+        setSaveErr(`写入新课程失败：${insErr.message}`)
+        return
+      }
+      for (const row of inserted ?? []) {
+        codeToId.set(row.code as string, row.id as string)
+      }
+    }
+
+    // 4) UPDATE existing courses one-by-one (different values per row, so
+    //    a single UPSERT won't help).
+    for (const { id, row } of toUpdate) {
+      const { error: upErr } = await supabase
+        .from('courses')
+        .update(row)
+        .eq('id', id)
+      if (upErr) {
+        setSaving(false)
+        setSaveErr(`更新课程失败 (id=${id})：${upErr.message}`)
+        return
+      }
+    }
+
+    // 5) Replace weekly_schedule rows for every touched course: delete old
+    //    then insert new. This handles timetable edits cleanly — the old
+    //    schedule is no longer authoritative once the user re-imports.
+    const allCourseIds = candidates
+      .map((c) => codeToId.get(c.code))
+      .filter((v): v is string => !!v)
+    if (allCourseIds.length > 0) {
+      const { error: delErr } = await supabase
+        .from('weekly_schedule')
+        .delete()
+        .in('course_id', allCourseIds)
+      if (delErr) {
+        setSaving(false)
+        setSaveErr(`清理旧课表失败：${delErr.message}`)
+        return
+      }
     }
 
     const scheduleRows: Array<{
@@ -137,7 +219,7 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
       teaching_weeks: string
     }> = []
     for (const c of candidates) {
-      const courseId = byKey.get(`${c.code}|${c.name_full ?? c.name}`)
+      const courseId = codeToId.get(c.code)
       if (!courseId) continue
       for (const s of c.sessions) {
         scheduleRows.push({
@@ -159,15 +241,17 @@ export default function CoursePastePanel({ semester, onSaved }: Props) {
         .insert(scheduleRows)
       if (schedErr) {
         setSaving(false)
-        setSaveErr(
-          `courses 写入成功但 weekly_schedule 失败：${schedErr.message}`,
-        )
+        setSaveErr(`写入 weekly_schedule 失败：${schedErr.message}`)
         return
       }
     }
 
     setSaving(false)
-    setOkMsg(`已导入 ${courseRows.length} 门课程 / ${scheduleRows.length} 条课表。`)
+    const insertedN = toInsert.length
+    const updatedN = toUpdate.length
+    setOkMsg(
+      `已处理 ${candidates.length} 门课程（新增 ${insertedN} / 更新 ${updatedN}），${scheduleRows.length} 条课表。`,
+    )
     setCandidates([])
     setInput('')
     onSaved()

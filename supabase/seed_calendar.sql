@@ -9,7 +9,7 @@
 
 DO $$
 DECLARE
-  semester_code TEXT := 'APR_2026';   -- <-- change if your semester code differs
+  semester_code TEXT := '2026/04';   -- <-- change if your semester code differs
   sem_id UUID;
 BEGIN
   SELECT id INTO sem_id FROM semesters WHERE code = semester_code LIMIT 1;
