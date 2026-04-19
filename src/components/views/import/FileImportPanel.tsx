@@ -273,6 +273,8 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       source,
       source_file: sourceFile,
       status: 'pending' as const,
+      date_inferred: c.date_inferred === true,
+      date_source: c.date_source ?? null,
     }))
     const { error } = await supabase.from('events').insert(rows)
     if (error) {

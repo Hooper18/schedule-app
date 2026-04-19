@@ -1,4 +1,4 @@
-import { Check, Undo2, Users, Pencil } from 'lucide-react'
+import { Check, Undo2, Users, Pencil, AlertTriangle } from 'lucide-react'
 import type { Event, Course, Semester } from '../../lib/types'
 import {
   formatShortDate,
@@ -88,7 +88,16 @@ export default function EventCard({ event, course, semester, onToggle, onEdit }:
           <div className="mt-1 flex items-center gap-2 text-xs text-dim flex-wrap">
             {event.date ? (
               <>
-                <span>{formatShortDate(event.date)}</span>
+                <span className="inline-flex items-center gap-0.5">
+                  {formatShortDate(event.date)}
+                  {event.date_inferred && (
+                    <AlertTriangle
+                      size={10}
+                      className="text-amber-500"
+                      aria-label="日期为推断值"
+                    />
+                  )}
+                </span>
                 {event.time && <span>{event.time.slice(0, 5)}</span>}
                 {wk !== null && <span>Week {wk}</span>}
                 {days !== null && !done && (
@@ -109,6 +118,15 @@ export default function EventCard({ event, course, semester, onToggle, onEdit }:
               <span className="text-muted italic">未定日期</span>
             )}
           </div>
+
+          {event.date_inferred && event.date_source && (
+            <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-600">
+              <AlertTriangle size={9} className="shrink-0" />
+              <span>
+                日期推断自 "<span className="italic">{event.date_source}</span>"，请核对
+              </span>
+            </div>
+          )}
 
           {event.notes && <div className="mt-1 text-xs text-dim line-clamp-2">{event.notes}</div>}
         </div>

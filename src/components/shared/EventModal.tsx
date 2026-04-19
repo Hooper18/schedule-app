@@ -42,6 +42,8 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
   const [isGroup, setIsGroup] = useState(false)
   const [status, setStatus] = useState<EventStatus>('pending')
   const [notes, setNotes] = useState('')
+  const [dateInferred, setDateInferred] = useState(false)
+  const [dateSource, setDateSource] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [confirmDel, setConfirmDel] = useState(false)
@@ -57,9 +59,21 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
     setIsGroup(event.is_group)
     setStatus(event.status)
     setNotes(event.notes ?? '')
+    setDateInferred(event.date_inferred)
+    setDateSource(event.date_source)
     setErr(null)
     setConfirmDel(false)
   }, [event])
+
+  // Manually editing the date means the user has confirmed it — clear the
+  // inference flags so the warning badge disappears on save.
+  const onDateChange = (v: string) => {
+    if (event && v !== (event.date ?? '')) {
+      setDateInferred(false)
+      setDateSource(null)
+    }
+    setDate(v)
+  }
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -78,6 +92,8 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
         is_group: isGroup,
         status,
         notes: notes || null,
+        date_inferred: dateInferred,
+        date_source: dateSource,
         updated_at: new Date().toISOString(),
       })
       .eq('id', event.id)
@@ -193,9 +209,14 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
             <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => onDateChange(e.target.value)}
               className={inputCls}
             />
+            {dateInferred && dateSource && (
+              <div className="mt-1 text-[10px] text-amber-600">
+                日期推断自 "<span className="italic">{dateSource}</span>"，改动会清除该标记
+              </div>
+            )}
           </Field>
           <Field label="时间">
             <input

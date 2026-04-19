@@ -109,6 +109,8 @@ export interface Event {
   sort_order: number
   created_at: string
   updated_at: string
+  date_inferred: boolean
+  date_source: string | null
 }
 
 export interface AcademicCalendar {
