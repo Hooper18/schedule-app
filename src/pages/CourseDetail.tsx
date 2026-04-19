@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Mail, Phone, MapPin } from 'lucide-react'
+import { Mail, Phone, MapPin } from 'lucide-react'
 import Layout from '../components/layout/Layout'
 import EventCard from '../components/shared/EventCard'
 import EventModal from '../components/shared/EventModal'
@@ -40,7 +40,7 @@ export default function CourseDetail() {
 
   if (!course) {
     return (
-      <Layout title="Course" hideNav>
+      <Layout title="Course" hideNav showBack onBack={() => navigate('/courses')}>
         <div className="p-8 text-center text-dim">未找到课程。</div>
       </Layout>
     )
@@ -50,15 +50,8 @@ export default function CourseDetail() {
     <Layout
       title={course.code}
       hideNav
-      headerRight={
-        <button
-          onClick={() => navigate(-1)}
-          className="p-2 rounded-lg hover:bg-hover text-dim -ml-16 absolute left-4"
-          aria-label="返回"
-        >
-          <ArrowLeft size={18} />
-        </button>
-      }
+      showBack
+      onBack={() => navigate('/courses')}
     >
       <div className="p-4 space-y-5">
         <section className="p-4 rounded-xl bg-card border border-border">
