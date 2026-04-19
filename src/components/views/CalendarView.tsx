@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
 import EventCard from '../shared/EventCard'
+import EventModal from '../shared/EventModal'
 import type { Event, Course, WeeklySchedule } from '../../lib/types'
 import { addMonths, isoOf, parseDate, startOfMonth, weekNumber } from '../../lib/utils'
 
@@ -14,11 +15,12 @@ const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 export default function CalendarView() {
   const { semester } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
-  const { events, setStatus } = useEvents(semester?.id)
+  const { events, setStatus, reload } = useEvents(semester?.id)
 
   const [cursor, setCursor] = useState<Date>(startOfMonth(new Date()))
   const [selected, setSelected] = useState<string>(isoOf(new Date()))
   const [mode, setMode] = useState<Mode>('month')
+  const [editing, setEditing] = useState<Event | null>(null)
 
   const courseMap = useMemo(
     () => Object.fromEntries(courses.map((c) => [c.id, c])),
@@ -55,10 +57,36 @@ export default function CalendarView() {
 
   const monthLabel = `${cursor.getFullYear()}.${String(cursor.getMonth() + 1).padStart(2, '0')}`
 
+  if (mode === 'day') {
+    return (
+      <>
+        <DayView
+          date={selected}
+          events={selectedEvents}
+          courseMap={courseMap}
+          semester={semester}
+          schedule={daySchedule}
+          onToggle={setStatus}
+          onEdit={setEditing}
+          onPrevDay={() => setSelected((iso) => shiftDate(iso, -1))}
+          onNextDay={() => setSelected((iso) => shiftDate(iso, 1))}
+          onBackToMonth={() => setMode('month')}
+        />
+        <EventModal
+          event={editing}
+          courses={courses}
+          onClose={() => setEditing(null)}
+          onSaved={reload}
+        />
+      </>
+    )
+  }
+
   return (
-    <div>
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-14 bg-main z-10">
-        <div className="flex items-center gap-2">
+    <>
+      {/* Sticky top: month controls + grid (stays visible while events scroll) */}
+      <div className="sticky top-14 z-10 bg-main border-b border-border">
+        <div className="flex items-center justify-center gap-2 px-4 py-3">
           <button
             onClick={() => setCursor((c) => addMonths(c, -1))}
             className="p-1.5 rounded hover:bg-hover text-dim"
@@ -66,7 +94,9 @@ export default function CalendarView() {
           >
             <ChevronLeft size={18} />
           </button>
-          <span className="font-semibold text-text">{monthLabel}</span>
+          <span className="font-semibold text-text min-w-[5rem] text-center">
+            {monthLabel}
+          </span>
           <button
             onClick={() => setCursor((c) => addMonths(c, 1))}
             className="p-1.5 rounded hover:bg-hover text-dim"
@@ -75,23 +105,6 @@ export default function CalendarView() {
             <ChevronRight size={18} />
           </button>
         </div>
-        <div className="flex items-center gap-1 bg-card rounded-lg p-0.5 border border-border text-xs">
-          <button
-            onClick={() => setMode('month')}
-            className={`px-3 py-1 rounded-md ${mode === 'month' ? 'bg-accent text-white' : 'text-dim'}`}
-          >
-            月
-          </button>
-          <button
-            onClick={() => setMode('day')}
-            className={`px-3 py-1 rounded-md ${mode === 'day' ? 'bg-accent text-white' : 'text-dim'}`}
-          >
-            日
-          </button>
-        </div>
-      </div>
-
-      {mode === 'month' ? (
         <MonthGrid
           grid={grid}
           cursor={cursor}
@@ -99,24 +112,59 @@ export default function CalendarView() {
           semester={semester}
           eventsByDate={eventsByDate}
           courseMap={courseMap}
-          onSelect={(iso) => {
-            setSelected(iso)
-            setMode('day')
-          }}
+          onSelect={setSelected}
         />
-      ) : (
-        <DayView
-          date={selected}
-          events={selectedEvents}
-          courseMap={courseMap}
-          semester={semester}
-          schedule={daySchedule}
-          onToggle={setStatus}
-          onPrevDay={() => setSelected((iso) => shiftDate(iso, -1))}
-          onNextDay={() => setSelected((iso) => shiftDate(iso, 1))}
-        />
-      )}
-    </div>
+      </div>
+
+      {/* Events for selected day (scrolls with page) */}
+      <div className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold text-text">
+              {formatSelectedLabel(selected)}
+            </div>
+            <div className="text-xs text-dim">
+              {selectedEvents.length === 0
+                ? '无事件'
+                : `${selectedEvents.length} 条事件`}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMode('day')}
+            className="text-xs text-accent hover:underline flex items-center gap-1"
+          >
+            查看日视图 <ArrowRight size={12} />
+          </button>
+        </div>
+
+        {selectedEvents.length === 0 ? (
+          <div className="text-sm text-dim py-8 text-center bg-card rounded-xl border border-border">
+            无事件
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {selectedEvents.map((e) => (
+              <EventCard
+                key={e.id}
+                event={e}
+                course={e.course_id ? courseMap[e.course_id] : undefined}
+                semester={semester}
+                onToggle={setStatus}
+                onEdit={setEditing}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <EventModal
+        event={editing}
+        courses={courses}
+        onClose={() => setEditing(null)}
+        onSaved={reload}
+      />
+    </>
   )
 }
 
@@ -124,6 +172,14 @@ function shiftDate(iso: string, delta: number): string {
   const d = parseDate(iso)
   d.setDate(d.getDate() + delta)
   return isoOf(d)
+}
+
+function formatSelectedLabel(iso: string): string {
+  const d = parseDate(iso)
+  const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
+  const today = isoOf(new Date())
+  const suffix = iso === today ? ' · 今天' : ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} 周${wd}${suffix}`
 }
 
 function buildMonthGrid(cursor: Date): Date[] {
@@ -185,23 +241,30 @@ function MonthGrid({ grid, cursor, selected, semester, eventsByDate, courseMap, 
           const isSunday = d.getDay() === 0
           const hasHoliday = dayEvents.some((e) => e.type === 'holiday')
 
-          const bg = isExamWeek
+          const seasonBg = isExamWeek
             ? 'bg-red-500/10'
             : isRevisionWeek
               ? 'bg-amber-500/10'
               : 'bg-card'
 
+          // Selected day gets accent background; overrides the season tint.
+          const bg = isSelected
+            ? 'bg-accent/20'
+            : inMonth
+              ? seasonBg
+              : 'bg-card'
+
+          const border = isSelected
+            ? 'border-accent'
+            : isToday
+              ? 'border-accent/60'
+              : 'border-transparent'
+
           return (
             <button
               key={iso}
               onClick={() => onSelect(iso)}
-              className={`aspect-square rounded-lg p-1 flex flex-col items-center justify-start border transition-colors ${
-                isSelected
-                  ? 'border-accent'
-                  : isToday
-                    ? 'border-accent/60'
-                    : 'border-transparent'
-              } ${inMonth ? bg : 'opacity-40'} hover:bg-hover`}
+              className={`aspect-square rounded-lg p-1 flex flex-col items-center justify-start border transition-colors ${border} ${bg} ${inMonth ? '' : 'opacity-40'} hover:bg-hover`}
             >
               <span
                 className={`text-xs ${
@@ -242,11 +305,24 @@ interface DayProps {
   semester: Parameters<typeof weekNumber>[1]
   schedule: WeeklySchedule[]
   onToggle: (id: string, status: 'pending' | 'completed') => void
+  onEdit: (event: Event) => void
   onPrevDay: () => void
   onNextDay: () => void
+  onBackToMonth: () => void
 }
 
-function DayView({ date, events, courseMap, semester, schedule, onToggle, onPrevDay, onNextDay }: DayProps) {
+function DayView({
+  date,
+  events,
+  courseMap,
+  semester,
+  schedule,
+  onToggle,
+  onEdit,
+  onPrevDay,
+  onNextDay,
+  onBackToMonth,
+}: DayProps) {
   const d = parseDate(date)
   const wk = weekNumber(date, semester)
   const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
@@ -254,6 +330,14 @@ function DayView({ date, events, courseMap, semester, schedule, onToggle, onPrev
   ).padStart(2, '0')} ${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`
   return (
     <div className="p-4 space-y-4">
+      <button
+        type="button"
+        onClick={onBackToMonth}
+        className="text-xs text-dim hover:text-accent flex items-center gap-1"
+      >
+        <ArrowLeft size={12} /> 返回月视图
+      </button>
+
       <div className="flex items-center justify-between">
         <button onClick={onPrevDay} className="p-1.5 rounded hover:bg-hover text-dim">
           <ChevronLeft size={18} />
@@ -284,6 +368,7 @@ function DayView({ date, events, courseMap, semester, schedule, onToggle, onPrev
                 course={e.course_id ? courseMap[e.course_id] : undefined}
                 semester={semester as never}
                 onToggle={onToggle}
+                onEdit={onEdit}
               />
             ))}
           </div>
