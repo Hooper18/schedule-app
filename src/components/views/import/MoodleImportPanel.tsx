@@ -42,6 +42,7 @@ interface Props {
   courses: Course[]
   moodleData: MoodleCourse[] | null
   onSaved: () => void
+  onGoToCoursesTab?: () => void
 }
 
 interface EventRow {
@@ -81,6 +82,7 @@ export default function MoodleImportPanel({
   courses,
   moodleData,
   onSaved,
+  onGoToCoursesTab,
 }: Props) {
   const { user } = useAuth()
   const [selected, setSelected] = useState<Record<string, boolean>>({})
@@ -89,9 +91,10 @@ export default function MoodleImportPanel({
   const [err, setErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
-  // overrideCodes[ci] === undefined → use Moodle-extracted code; anything else
-  // (including empty string) wins. Empty string is treated as "user cleared
-  // the code" i.e. force unmatched.
+  // overrideCodes[ci] === undefined → use Moodle-extracted code (auto-match);
+  // overrideCodes[ci] === ''        → user explicitly picked "不匹配任何课程"
+  //                                    from the dropdown (force course_id=null);
+  // overrideCodes[ci] === 'COM104'  → user picked that course from the dropdown.
   const [overrideCodes, setOverrideCodes] = useState<Record<number, string>>({})
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
 
@@ -131,19 +134,20 @@ export default function MoodleImportPanel({
     originalCode: string | null,
   ): { effectiveCode: string | null; matched: Course | null } => {
     const override = overrideCodes[ci]
-    const effectiveCode =
-      override !== undefined ? (override || null) : originalCode
-    return { effectiveCode, matched: matchCourse(effectiveCode) }
+    if (override === undefined) {
+      return {
+        effectiveCode: originalCode,
+        matched: matchCourse(originalCode),
+      }
+    }
+    if (override === '') {
+      return { effectiveCode: null, matched: null }
+    }
+    return { effectiveCode: override, matched: matchCourse(override) }
   }
 
-  const commitOverride = (ci: number, raw: string) => {
-    const trimmed = raw.trim().toUpperCase()
-    setOverrideCodes((prev) => {
-      const next = { ...prev }
-      if (!trimmed) delete next[ci]
-      else next[ci] = trimmed
-      return next
-    })
+  const commitOverride = (ci: number, value: string) => {
+    setOverrideCodes((prev) => ({ ...prev, [ci]: value }))
     setEditingIdx(null)
   }
 
@@ -328,6 +332,37 @@ export default function MoodleImportPanel({
 
   // Empty / waiting states ----------------------------------------------------
 
+  // Hard prerequisite: we match Moodle assignments/quizzes to courses by code.
+  // Without any course rows in this semester, every event would land as
+  // course_id=null — better to block and point the user at the right import.
+  if (courses.length === 0) {
+    return (
+      <section className="p-4 rounded-xl bg-card border border-amber-500/40 text-sm text-dim space-y-2">
+        <div className="font-medium text-text">
+          ⚠️ 请先导入课程表，再使用 Moodle 导入
+        </div>
+        <div>
+          Moodle 导入需要按 course code 关联到已有课程。本学期还没有任何课程
+          记录，所有 assignment / quiz 都会变成 course_id=null 的孤立事件。
+        </div>
+        <div>
+          请先通过 <strong>AC Online 插件</strong>{' '}
+          从 XMUM AC Online 一键导入课程表，或在"<strong>课程表</strong>" tab
+          手动粘贴。
+        </div>
+        {onGoToCoursesTab && (
+          <button
+            type="button"
+            onClick={onGoToCoursesTab}
+            className="mt-1 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium"
+          >
+            前往 课程表 tab
+          </button>
+        )}
+      </section>
+    )
+  }
+
   if (moodleData === null) {
     return (
       <section className="p-4 rounded-xl bg-card border border-border text-sm text-dim space-y-2">
@@ -399,27 +434,25 @@ export default function MoodleImportPanel({
                       />
                     )}
                     {isEditing ? (
-                      <input
-                        type="text"
+                      <select
                         autoFocus
-                        defaultValue={effectiveCode ?? ''}
-                        onBlur={(e) =>
+                        value={effectiveCode ?? ''}
+                        onChange={(e) =>
                           commitOverride(ci, e.currentTarget.value)
                         }
+                        onBlur={() => setEditingIdx(null)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            commitOverride(
-                              ci,
-                              (e.target as HTMLInputElement).value,
-                            )
-                          } else if (e.key === 'Escape') {
-                            setEditingIdx(null)
-                          }
+                          if (e.key === 'Escape') setEditingIdx(null)
                         }}
-                        placeholder="课程代码"
-                        className="w-24 px-1.5 py-0.5 text-[11px] font-bold rounded bg-main border border-accent text-text focus:outline-none"
-                      />
+                        className="max-w-[14rem] px-1.5 py-0.5 text-[11px] font-bold rounded bg-main border border-accent text-text focus:outline-none"
+                      >
+                        <option value="">不匹配任何课程</option>
+                        {courses.map((c) => (
+                          <option key={c.id} value={c.code}>
+                            {c.code} - {c.name}
+                          </option>
+                        ))}
+                      </select>
                     ) : (
                       <button
                         type="button"
@@ -442,8 +475,8 @@ export default function MoodleImportPanel({
                     {matched
                       ? `→ ${matched.code} ${matched.name}`
                       : effectiveCode
-                        ? `未匹配到课程代码 ${effectiveCode}，可点击编辑改成其他 code`
-                        : '无法识别课程代码，点击"未识别"手动输入'}
+                        ? `未匹配到课程代码 ${effectiveCode}，点击代码重新选择`
+                        : '未关联任何课程，点击代码可选择'}
                   </div>
                 </div>
                 {mc.events.length > 0 && (

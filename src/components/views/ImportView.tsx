@@ -124,6 +124,7 @@ export default function ImportView() {
             courses={courses}
             moodleData={moodleData}
             onSaved={reloadEvents}
+            onGoToCoursesTab={() => setImportTab('schedule')}
           />
         )}
       </section>
