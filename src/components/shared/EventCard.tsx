@@ -1,4 +1,4 @@
-import { Check, Undo2, Users, Pencil, AlertTriangle } from 'lucide-react'
+import { Check, Undo2, Users, Pencil, AlertTriangle, Triangle } from 'lucide-react'
 import type { Event, Course, Semester } from '../../lib/types'
 import {
   formatShortDate,
@@ -35,9 +35,9 @@ export default function EventCard({ event, course, semester, onToggle, onEdit }:
   return (
     <div
       onClick={clickable ? () => onEdit!(event) : undefined}
-      className={`p-3 rounded-xl bg-card border border-border transition-opacity ${
-        done ? 'opacity-50' : ''
-      } ${clickable ? 'cursor-pointer hover:bg-hover' : ''}`}
+      className={`p-3 rounded-xl bg-card border transition-opacity ${
+        event.date === null ? 'border-emerald-500/40' : 'border-border'
+      } ${done ? 'opacity-50' : ''} ${clickable ? 'cursor-pointer hover:bg-hover' : ''}`}
     >
       <div className="flex items-start gap-3">
         <button
@@ -115,7 +115,10 @@ export default function EventCard({ event, course, semester, onToggle, onEdit }:
                 )}
               </>
             ) : (
-              <span className="text-muted italic">未定日期</span>
+              <span className="inline-flex items-center gap-0.5 text-emerald-500 font-medium">
+                <Triangle size={10} aria-label="待定日期" />
+                待定
+              </span>
             )}
           </div>
 

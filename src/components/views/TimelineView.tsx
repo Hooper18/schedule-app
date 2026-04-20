@@ -84,8 +84,8 @@ export default function TimelineView() {
 
         {tbd.length > 0 && (
           <section className="space-y-2">
-            <h2 className="text-xs font-semibold tracking-wider text-muted uppercase">
-              Date TBD ({tbd.length})
+            <h2 className="text-xs font-semibold tracking-wider text-emerald-500">
+              📋 待定日期 · {tbd.length} 条
             </h2>
             <div className="space-y-2">
               {tbd.map((e) => (

@@ -22,6 +22,12 @@ export default function CourseDetail() {
     () => events.filter((e) => e.course_id === id),
     [events, id],
   )
+  const { datedEvents, tbdEvents } = useMemo(() => {
+    const dated: Event[] = []
+    const tbd: Event[] = []
+    for (const e of courseEvents) (e.date ? dated : tbd).push(e)
+    return { datedEvents: dated, tbdEvents: tbd }
+  }, [courseEvents])
 
   const weightRows = useMemo(() => {
     const agg: Record<string, number> = {}
@@ -119,29 +125,57 @@ export default function CourseDetail() {
           </section>
         )}
 
-        <section>
-          <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
-            事件 ({courseEvents.length})
-          </h3>
-          {courseEvents.length === 0 ? (
+        {courseEvents.length === 0 ? (
+          <section>
+            <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
+              事件 (0)
+            </h3>
             <div className="text-sm text-dim py-4 text-center bg-card rounded-lg border border-border">
               暂无事件
             </div>
-          ) : (
-            <div className="space-y-2">
-              {courseEvents.map((e) => (
-                <EventCard
-                  key={e.id}
-                  event={e}
-                  course={course}
-                  semester={semester}
-                  onToggle={setStatus}
-                  onEdit={setEditing}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+          </section>
+        ) : (
+          <>
+            {datedEvents.length > 0 && (
+              <section>
+                <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
+                  事件 ({datedEvents.length})
+                </h3>
+                <div className="space-y-2">
+                  {datedEvents.map((e) => (
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      course={course}
+                      semester={semester}
+                      onToggle={setStatus}
+                      onEdit={setEditing}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+            {tbdEvents.length > 0 && (
+              <section>
+                <h3 className="text-xs font-semibold tracking-wider text-emerald-500 mb-2">
+                  📋 待定日期 · {tbdEvents.length} 条
+                </h3>
+                <div className="space-y-2">
+                  {tbdEvents.map((e) => (
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      course={course}
+                      semester={semester}
+                      onToggle={setStatus}
+                      onEdit={setEditing}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
 
         {course.consultation_hours && course.consultation_hours.length > 0 && (
           <section>
