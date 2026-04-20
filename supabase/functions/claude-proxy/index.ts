@@ -721,7 +721,7 @@ Deno.serve(async (req) => {
     maxTokens = 8192
     // File import reasons over long, messy syllabus text with category/sub-item
     // weight nesting and cross-file dedup — worth the stronger model.
-    model = "claude-sonnet-4-6-20250514"
+    model = "claude-sonnet-4-6"
   } else if (action === "course_import") {
     systemPrompt = buildCourseImportSystemPrompt()
     tool = recordCoursesTool
