@@ -116,10 +116,23 @@ async function scanDashboard() {
     return []
   }
 
+  // Filter by current semester — course names embed a "YYYY/MM" semester tag.
+  // Pick the most common tag on this dashboard as "current" and drop courses
+  // tagged with any other semester. Courses without a tag are kept (unknown).
+  const currentSem = detectCurrentSemester(items)
+  const { filtered, skipped } = filterCurrentSemester(items, currentSem)
+  if (currentSem && skipped > 0) {
+    setProgress(
+      btn,
+      `检测到当前学期: ${currentSem}，过滤掉 ${skipped} 门旧课程`,
+    )
+    await sleep(900)
+  }
+
   const results = []
-  for (let i = 0; i < items.length; i++) {
-    setProgress(btn, `正在扫描 ${i + 1}/${items.length}…`)
-    const { url, nameHint } = items[i]
+  for (let i = 0; i < filtered.length; i++) {
+    setProgress(btn, `正在扫描 ${i + 1}/${filtered.length}…`)
+    const { url, nameHint } = filtered[i]
     const resp = await fetch(url, { credentials: "include" })
     const html = await resp.text()
     if (isLoginPage(html, resp.url)) {
@@ -128,9 +141,49 @@ async function scanDashboard() {
     }
     const parsed = parseCourse(html, url, nameHint)
     if (parsed) results.push(parsed)
-    if (i < items.length - 1) await sleep(FETCH_GAP_MS)
+    if (i < filtered.length - 1) await sleep(FETCH_GAP_MS)
   }
   return results
+}
+
+const SEMESTER_REGEX = /(\d{4}\/\d{2})/
+
+function detectCurrentSemester(items) {
+  const counts = new Map()
+  for (const it of items) {
+    if (!it.nameHint) continue
+    const m = it.nameHint.match(SEMESTER_REGEX)
+    if (!m) continue
+    counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+  }
+  let best = null
+  let bestCount = 0
+  for (const [sem, n] of counts) {
+    if (n > bestCount) {
+      best = sem
+      bestCount = n
+    }
+  }
+  return best
+}
+
+function filterCurrentSemester(items, currentSem) {
+  if (!currentSem) return { filtered: items, skipped: 0 }
+  const kept = []
+  let skipped = 0
+  for (const it of items) {
+    if (!it.nameHint) {
+      kept.push(it)
+      continue
+    }
+    const m = it.nameHint.match(SEMESTER_REGEX)
+    if (!m || m[1] === currentSem) {
+      kept.push(it)
+    } else {
+      skipped++
+    }
+  }
+  return { filtered: kept, skipped }
 }
 
 function isLoginPage(html, finalUrl) {
@@ -148,7 +201,7 @@ function parseCourse(docOrHtml, courseUrl, nameHint) {
       : docOrHtml
 
   const courseName = (nameHint || extractCourseName(doc) || "").trim()
-  const codeMatch = courseName.match(/^([A-Z]{2,4}\d{2,4}\*?)/)
+  const codeMatch = courseName.match(/^([A-Z]{2,4}[\d.]+[*]?)/)
   const courseCode = codeMatch ? codeMatch[1] : null
 
   const todayIso = new Date().toISOString().slice(0, 10)
