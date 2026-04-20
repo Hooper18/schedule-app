@@ -80,16 +80,17 @@ async function handleImport() {
       return
     }
 
-    const payload = JSON.stringify(nonEmpty)
-    await new Promise((resolve) => {
-      chrome.storage.local.set({ moodle_import_data: payload }, () => resolve())
-    })
-    window.open(`${TARGET_ORIGIN}/import?source=moodle`, "_blank")
+    // Layer 2: show picker overlay for file selection, download selected
+    // files + inline images, then build the enriched payload. Layer 1-only
+    // payloads fall out of this flow as a degenerate case (no files chosen,
+    // page text still sent through).
+    setProgress(btn, null)
+    await runLayer2Flow(nonEmpty)
   } catch (err) {
     console.error("[schedule-app/moodle] import failed", err)
     alert(`导入失败：${err && err.message ? err.message : String(err)}`)
   } finally {
-    setProgress(btn, null)
+    setProgress(document.getElementById(BUTTON_ID), null)
   }
 }
 
@@ -305,12 +306,31 @@ function parseCourse(docOrHtml, courseUrl, nameHint) {
     files.push({ name, url })
   }
 
+  // Layer 2 inputs: the main-content textContent (for Claude as context) and
+  // the URLs of every pluginfile-backed <img> inside the course content (to
+  // be base64-downloaded later as vision input).
+  const mainContent =
+    doc.querySelector("#region-main") || doc.querySelector(".course-content")
+  const pageText = mainContent
+    ? mainContent.textContent.replace(/\s+/g, " ").trim().slice(0, 8000)
+    : ""
+
+  const inlineImages = []
+  const imgSel =
+    '#region-main img[src*="pluginfile.php"], .course-content img[src*="pluginfile.php"]'
+  for (const img of doc.querySelectorAll(imgSel)) {
+    const src = img.src || img.getAttribute("src")
+    if (src && !inlineImages.includes(src)) inlineImages.push(src)
+  }
+
   return {
     course_code: courseCode,
     course_name: courseName,
     course_url: courseUrl,
     events,
     files,
+    pageText,
+    inlineImages,
   }
 }
 
@@ -372,4 +392,652 @@ function setProgress(btn, text) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2: file picker overlay + download pipeline
+// ---------------------------------------------------------------------------
+
+const OVERLAY_ID = "schedule-app-moodle-overlay"
+const MAX_FILE_BYTES = 10 * 1024 * 1024
+const DOWNLOAD_GAP_MS = 300
+const PROBE_CONCURRENCY = 5
+
+// File-name substring match (case-insensitive). Files matching any keyword
+// are prechecked in the picker.
+const AUTO_SELECT_KEYWORDS = [
+  "assignment", "submission", "coursework", "assessment", "evaluation",
+  "quiz", "exam", "midterm", "final", "test",
+  "syllabus", "outline", "schedule", "deadline", "project",
+  "rubric", "grading", "marking", "weightage",
+  "course info", "course_info", "courseinformation",
+  "group assignment", "individual assignment",
+]
+
+function autoSelectByKeyword(name) {
+  const lower = (name || "").toLowerCase()
+  return AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
+}
+
+// Extract file extension from either anchor text or URL. Returns lowercase
+// ext without the dot, or null when nothing matches our allow-list.
+function detectExt(name, url) {
+  const pat = /\.(pptx|ppt|pdf|docx|doc|png|jpg|jpeg)(?=$|\?|#)/i
+  const n = (name || "").match(pat)
+  if (n) return n[1].toLowerCase()
+  const u = (url || "").match(pat)
+  if (u) return u[1].toLowerCase()
+  return null
+}
+
+function formatBytes(bytes) {
+  if (bytes === null || bytes === undefined) return "大小未知"
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// Rough cost estimate — shown in both picker (pre-download) and ready
+// overlay (post-download). Constants match the task spec.
+function estimateCostRough(selectedFiles, courses) {
+  const fileSizeMB = selectedFiles.reduce(
+    (s, f) => s + (f.sizeBytes || f.size || 0) / 1024 / 1024,
+    0,
+  )
+  const fileInputTokens = fileSizeMB * 60000
+  const pageTextChars = courses.reduce(
+    (s, c) => s + (c.pageText ? c.pageText.length : 0),
+    0,
+  )
+  const pageTextTokens = pageTextChars / 4
+  const imageCount = courses.reduce(
+    (s, c) => s + (c.inlineImages ? c.inlineImages.length : 0),
+    0,
+  )
+  const imageTokens = imageCount * 1500
+  const outputTokens = courses.length * 500
+  const inputCost =
+    ((fileInputTokens + pageTextTokens + imageTokens) / 1_000_000) * 1
+  const outputCost = (outputTokens / 1_000_000) * 5
+  return Math.max(0.01, inputCost + outputCost)
+}
+
+async function runLayer2Flow(courses) {
+  // Build flat file candidate list filtered to known extensions.
+  const allFiles = []
+  courses.forEach((c, ci) => {
+    for (const f of c.files) {
+      const ext = detectExt(f.name, f.url)
+      if (!ext) continue
+      allFiles.push({
+        courseIdx: ci,
+        name: f.name,
+        url: f.url,
+        ext,
+        sizeBytes: null,
+        selected: autoSelectByKeyword(f.name),
+      })
+    }
+  })
+
+  // Probe sizes (best effort — no size means we'll enforce the 10MB cap at
+  // download time instead).
+  await probeSizes(allFiles)
+  for (const f of allFiles) {
+    if (f.sizeBytes !== null && f.sizeBytes > MAX_FILE_BYTES) {
+      f.selected = false
+    }
+  }
+
+  const step1 = await showPickerOverlay(courses, allFiles)
+  if (step1 === "cancel") return
+
+  const downloads = await downloadAll(courses, allFiles)
+
+  const step2 = await showReadyOverlay(courses, downloads)
+  if (step2 === "cancel") return
+
+  const payload = buildPayload(courses, downloads)
+  await new Promise((resolve) => {
+    chrome.storage.local.set(
+      { moodle_import_data: JSON.stringify(payload) },
+      () => resolve(),
+    )
+  })
+  window.open(`${TARGET_ORIGIN}/import?source=moodle`, "_blank")
+}
+
+async function probeSizes(allFiles) {
+  if (allFiles.length === 0) return
+  const btn = document.getElementById(BUTTON_ID)
+  let done = 0
+  const update = () => setProgress(btn, `探测文件大小 ${done}/${allFiles.length}…`)
+  update()
+
+  const queue = [...allFiles]
+  const worker = async () => {
+    while (queue.length > 0) {
+      const f = queue.shift()
+      if (!f) break
+      try {
+        const resp = await fetch(f.url, {
+          method: "HEAD",
+          credentials: "include",
+          redirect: "follow",
+        })
+        if (resp.ok) {
+          const len = resp.headers.get("content-length")
+          if (len) f.sizeBytes = parseInt(len, 10)
+        }
+      } catch {
+        // leave sizeBytes null
+      } finally {
+        done++
+        update()
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(PROBE_CONCURRENCY, allFiles.length) }, worker),
+  )
+  setProgress(btn, null)
+}
+
+function ensureSpinKeyframes() {
+  if (document.getElementById("schedule-spin-style")) return
+  const style = document.createElement("style")
+  style.id = "schedule-spin-style"
+  style.textContent =
+    "@keyframes schedule-spin { to { transform: rotate(360deg); } }"
+  document.head.appendChild(style)
+}
+
+function hideOverlay() {
+  const el = document.getElementById(OVERLAY_ID)
+  if (el) el.remove()
+}
+
+// Picker: course-grouped file list with checkboxes. Resolves 'continue' or
+// 'cancel'. Mutates allFiles[i].selected in place.
+function showPickerOverlay(courses, allFiles) {
+  return new Promise((resolve) => {
+    hideOverlay()
+    const backdrop = document.createElement("div")
+    backdrop.id = OVERLAY_ID
+    backdrop.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:99999",
+      "background:rgba(0,0,0,0.5)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "font-family:system-ui,-apple-system,'Segoe UI',sans-serif",
+    ].join(";")
+
+    const panel = document.createElement("div")
+    panel.style.cssText = [
+      "background:#fff",
+      "color:#111",
+      "border-radius:12px",
+      "max-height:80vh",
+      "width:min(720px,92vw)",
+      "display:flex",
+      "flex-direction:column",
+      "box-shadow:0 20px 60px rgba(0,0,0,0.4)",
+      "overflow:hidden",
+    ].join(";")
+
+    const header = document.createElement("div")
+    header.style.cssText =
+      "padding:14px 18px;border-bottom:1px solid #eee;font-weight:600;font-size:15px;display:flex;justify-content:space-between;align-items:center"
+    const titleSpan = document.createElement("span")
+    titleSpan.textContent = "📋 Moodle Layer 2 · 选择要给 AI 解析的课件"
+    header.appendChild(titleSpan)
+    const closeBtn = document.createElement("button")
+    closeBtn.textContent = "✕"
+    closeBtn.style.cssText =
+      "border:none;background:none;font-size:20px;cursor:pointer;color:#666;padding:0 4px"
+    closeBtn.onclick = () => {
+      hideOverlay()
+      resolve("cancel")
+    }
+    header.appendChild(closeBtn)
+    panel.appendChild(header)
+
+    const body = document.createElement("div")
+    body.style.cssText = "overflow-y:auto;padding:14px 18px;flex:1"
+
+    const footerA = document.createElement("div")
+    const footerB = document.createElement("div")
+
+    const updateFooter = () => {
+      const sel = allFiles.filter(
+        (f) =>
+          f.selected &&
+          (f.sizeBytes === null || f.sizeBytes <= MAX_FILE_BYTES),
+      )
+      const totalBytes = sel.reduce((s, f) => s + (f.sizeBytes || 0), 0)
+      const coursesWithText = courses.filter(
+        (c) => c.pageText && c.pageText.length > 0,
+      ).length
+      const images = courses.reduce(
+        (s, c) => s + (c.inlineImages ? c.inlineImages.length : 0),
+        0,
+      )
+      footerA.textContent = `已选 ${sel.length} 个文件 (${formatBytes(totalBytes)}) + ${coursesWithText} 门课页面文本 + ${images} 张内嵌图片`
+      const cost = estimateCostRough(sel, courses)
+      footerB.textContent = `预估 API 费用: ~$${cost.toFixed(2)}`
+    }
+
+    courses.forEach((c, ci) => {
+      const block = document.createElement("div")
+      block.style.cssText = "margin-bottom:18px"
+
+      const h3 = document.createElement("div")
+      h3.textContent = `📚 ${c.course_name || c.course_code || "未命名课程"}`
+      h3.style.cssText = "font-weight:600;font-size:13px;margin-bottom:6px"
+      block.appendChild(h3)
+
+      const lines = []
+      lines.push(`Layer 1: 发现 ${c.events.length} 个 DDL`)
+      if (c.pageText && c.pageText.length > 0) {
+        lines.push(
+          `页面文本: ${c.pageText.length.toLocaleString()} 字符 ✓（自动包含）`,
+        )
+      }
+      if (c.inlineImages && c.inlineImages.length > 0) {
+        lines.push(
+          `内嵌图片: ${c.inlineImages.length} 张 ✓（自动包含）`,
+        )
+      }
+      for (const line of lines) {
+        const row = document.createElement("div")
+        row.textContent = line
+        row.style.cssText = "font-size:12px;color:#555;margin-bottom:2px"
+        block.appendChild(row)
+      }
+
+      const filesForCourse = allFiles.filter((f) => f.courseIdx === ci)
+      if (filesForCourse.length > 0) {
+        const label = document.createElement("div")
+        label.textContent = "可下载文件:"
+        label.style.cssText =
+          "font-size:12px;color:#555;margin-top:6px;margin-bottom:4px"
+        block.appendChild(label)
+        for (const f of filesForCourse) {
+          block.appendChild(makeFileRow(f, updateFooter))
+        }
+      } else {
+        const none = document.createElement("div")
+        none.textContent = "（没有符合支持格式的可下载文件）"
+        none.style.cssText =
+          "font-size:12px;color:#888;font-style:italic;margin-top:4px"
+        block.appendChild(none)
+      }
+
+      body.appendChild(block)
+    })
+
+    panel.appendChild(body)
+
+    const footer = document.createElement("div")
+    footer.style.cssText =
+      "border-top:1px solid #eee;padding:12px 18px;background:#fafafa"
+    footerA.style.cssText = "font-size:12px;color:#555"
+    footerB.style.cssText = "font-size:12px;color:#555;margin-top:2px"
+    footer.appendChild(footerA)
+    footer.appendChild(footerB)
+
+    const actions = document.createElement("div")
+    actions.style.cssText =
+      "margin-top:10px;display:flex;gap:8px;justify-content:flex-end"
+    const cancelBtn = document.createElement("button")
+    cancelBtn.textContent = "取消"
+    cancelBtn.style.cssText =
+      "padding:8px 14px;border:1px solid #ddd;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;color:#333"
+    cancelBtn.onclick = () => {
+      hideOverlay()
+      resolve("cancel")
+    }
+    actions.appendChild(cancelBtn)
+
+    const okBtn = document.createElement("button")
+    okBtn.textContent = "下载并继续"
+    okBtn.style.cssText =
+      "padding:8px 14px;border:none;background:#10B981;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600"
+    okBtn.onclick = () => {
+      hideOverlay()
+      resolve("continue")
+    }
+    actions.appendChild(okBtn)
+    footer.appendChild(actions)
+    panel.appendChild(footer)
+
+    updateFooter()
+    backdrop.appendChild(panel)
+    document.body.appendChild(backdrop)
+  })
+}
+
+function makeFileRow(f, onToggle) {
+  const tooLarge = f.sizeBytes !== null && f.sizeBytes > MAX_FILE_BYTES
+
+  const row = document.createElement("label")
+  row.style.cssText =
+    "display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px"
+  if (tooLarge) row.style.cursor = "not-allowed"
+
+  const cb = document.createElement("input")
+  cb.type = "checkbox"
+  cb.checked = !!f.selected && !tooLarge
+  cb.disabled = tooLarge
+  cb.style.cssText = "margin:0"
+  cb.addEventListener("change", () => {
+    f.selected = cb.checked
+    onToggle()
+  })
+  row.appendChild(cb)
+
+  const name = document.createElement("span")
+  name.textContent = f.name
+  name.style.cssText = [
+    "flex:1",
+    "min-width:0",
+    "overflow:hidden",
+    "text-overflow:ellipsis",
+    "white-space:nowrap",
+    tooLarge ? "color:#aaa;text-decoration:line-through" : "color:#333",
+  ].join(";")
+  row.appendChild(name)
+
+  const size = document.createElement("span")
+  if (tooLarge) {
+    size.textContent = `${formatBytes(f.sizeBytes)} (超过 10MB，跳过)`
+    size.style.color = "#aaa"
+  } else if (f.sizeBytes !== null) {
+    size.textContent = formatBytes(f.sizeBytes)
+    size.style.color = "#666"
+  } else {
+    size.textContent = "大小未知"
+    size.style.color = "#aaa"
+  }
+  size.style.cssText += ";font-size:11px;white-space:nowrap;flex-shrink:0"
+  row.appendChild(size)
+
+  return row
+}
+
+function showProgressOverlay(initialText) {
+  hideOverlay()
+  ensureSpinKeyframes()
+  const backdrop = document.createElement("div")
+  backdrop.id = OVERLAY_ID
+  backdrop.style.cssText = [
+    "position:fixed",
+    "inset:0",
+    "z-index:99999",
+    "background:rgba(0,0,0,0.5)",
+    "display:flex",
+    "align-items:center",
+    "justify-content:center",
+    "font-family:system-ui,-apple-system,'Segoe UI',sans-serif",
+  ].join(";")
+
+  const panel = document.createElement("div")
+  panel.style.cssText = [
+    "background:#fff",
+    "border-radius:12px",
+    "padding:24px 32px",
+    "min-width:320px",
+    "max-width:92vw",
+    "box-shadow:0 20px 60px rgba(0,0,0,0.4)",
+    "text-align:center",
+  ].join(";")
+
+  const spinner = document.createElement("div")
+  spinner.style.cssText = [
+    "width:32px",
+    "height:32px",
+    "border:3px solid #e5e7eb",
+    "border-top-color:#10B981",
+    "border-radius:50%",
+    "margin:0 auto 12px",
+    "animation:schedule-spin 0.8s linear infinite",
+  ].join(";")
+  panel.appendChild(spinner)
+
+  const text = document.createElement("div")
+  text.textContent = initialText
+  text.style.cssText = "font-size:13px;color:#333"
+  panel.appendChild(text)
+
+  backdrop.appendChild(panel)
+  document.body.appendChild(backdrop)
+
+  return {
+    setText: (t) => {
+      text.textContent = t
+    },
+    close: () => hideOverlay(),
+  }
+}
+
+async function downloadAll(courses, allFiles) {
+  const filesByCourse = new Map()
+  const imagesByCourse = new Map()
+
+  const selected = allFiles.filter(
+    (f) =>
+      f.selected && (f.sizeBytes === null || f.sizeBytes <= MAX_FILE_BYTES),
+  )
+  const allImages = []
+  courses.forEach((c, ci) => {
+    if (!c.inlineImages) return
+    for (const url of c.inlineImages) {
+      allImages.push({ courseIdx: ci, url })
+    }
+  })
+
+  const ov = showProgressOverlay(
+    selected.length > 0 ? "准备下载课件…" : "准备下载内嵌图片…",
+  )
+  try {
+    for (let i = 0; i < selected.length; i++) {
+      const f = selected[i]
+      const courseLabel =
+        courses[f.courseIdx].course_code ||
+        courses[f.courseIdx].course_name ||
+        "课程"
+      ov.setText(
+        `正在下载 ${courseLabel} 课件 ${i + 1}/${selected.length}：${f.name}`,
+      )
+      const res = await downloadFileAsBase64(f.url)
+      if (res) {
+        const list = filesByCourse.get(f.courseIdx) || []
+        list.push({
+          name: f.name,
+          data: res.data,
+          mime: res.mime || mimeFromExt(f.ext),
+          size: res.size,
+        })
+        filesByCourse.set(f.courseIdx, list)
+      }
+      if (i < selected.length - 1) await sleep(DOWNLOAD_GAP_MS)
+    }
+
+    for (let i = 0; i < allImages.length; i++) {
+      const img = allImages[i]
+      ov.setText(`正在下载内嵌图片 ${i + 1}/${allImages.length}`)
+      const res = await downloadFileAsBase64(img.url)
+      if (res) {
+        const list = imagesByCourse.get(img.courseIdx) || []
+        list.push({
+          data: res.data,
+          mime: res.mime || "image/png",
+        })
+        imagesByCourse.set(img.courseIdx, list)
+      }
+      if (i < allImages.length - 1) await sleep(DOWNLOAD_GAP_MS)
+    }
+  } finally {
+    ov.close()
+  }
+
+  return { filesByCourse, imagesByCourse }
+}
+
+async function downloadFileAsBase64(url) {
+  try {
+    const resp = await fetch(url, { credentials: "include" })
+    if (resp.url && /\/login\//i.test(resp.url)) return null
+    if (!resp.ok) return null
+    const blob = await resp.blob()
+    if (blob.size > MAX_FILE_BYTES) return null
+    const data = await blobToBase64(blob)
+    return { data, mime: blob.type || "", size: blob.size }
+  } catch (e) {
+    console.warn("[schedule-app/moodle] download failed", url, e)
+    return null
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const r = reader.result
+      if (typeof r !== "string") {
+        reject(new Error("reader result not a string"))
+        return
+      }
+      resolve(r.split(",")[1] || "")
+    }
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+function mimeFromExt(ext) {
+  switch (ext) {
+    case "pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    case "ppt":
+      return "application/vnd.ms-powerpoint"
+    case "pdf":
+      return "application/pdf"
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    case "doc":
+      return "application/msword"
+    case "png":
+      return "image/png"
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg"
+    default:
+      return "application/octet-stream"
+  }
+}
+
+function showReadyOverlay(courses, downloads) {
+  return new Promise((resolve) => {
+    hideOverlay()
+    let totalFiles = 0
+    let totalBytes = 0
+    for (const arr of downloads.filesByCourse.values()) {
+      for (const f of arr) {
+        totalFiles++
+        totalBytes += f.size
+      }
+    }
+    let totalImages = 0
+    for (const arr of downloads.imagesByCourse.values()) totalImages += arr.length
+
+    const selectedFlat = []
+    for (const arr of downloads.filesByCourse.values()) {
+      for (const f of arr) selectedFlat.push({ size: f.size })
+    }
+    const cost = estimateCostRough(selectedFlat, courses)
+
+    const backdrop = document.createElement("div")
+    backdrop.id = OVERLAY_ID
+    backdrop.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:99999",
+      "background:rgba(0,0,0,0.5)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "font-family:system-ui,-apple-system,'Segoe UI',sans-serif",
+    ].join(";")
+
+    const panel = document.createElement("div")
+    panel.style.cssText = [
+      "background:#fff",
+      "border-radius:12px",
+      "padding:22px 28px",
+      "min-width:340px",
+      "max-width:92vw",
+      "box-shadow:0 20px 60px rgba(0,0,0,0.4)",
+    ].join(";")
+
+    const title = document.createElement("div")
+    title.textContent = "✓ 下载完成"
+    title.style.cssText =
+      "font-weight:600;font-size:15px;margin-bottom:10px;color:#10B981"
+    panel.appendChild(title)
+
+    const info1 = document.createElement("div")
+    info1.textContent = `已下载 ${totalFiles} 个文件 (${formatBytes(totalBytes)}) + ${totalImages} 张内嵌图片`
+    info1.style.cssText = "font-size:13px;color:#333;margin-bottom:4px"
+    panel.appendChild(info1)
+
+    const info2 = document.createElement("div")
+    info2.textContent = `预估 API 费用: ~$${cost.toFixed(2)}（基于实际文件大小）`
+    info2.style.cssText = "font-size:12px;color:#666;margin-bottom:14px"
+    panel.appendChild(info2)
+
+    const actions = document.createElement("div")
+    actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end"
+    const cancelBtn = document.createElement("button")
+    cancelBtn.textContent = "取消"
+    cancelBtn.style.cssText =
+      "padding:8px 14px;border:1px solid #ddd;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;color:#333"
+    cancelBtn.onclick = () => {
+      hideOverlay()
+      resolve("cancel")
+    }
+    actions.appendChild(cancelBtn)
+
+    const okBtn = document.createElement("button")
+    okBtn.textContent = "确认解析并导入"
+    okBtn.style.cssText =
+      "padding:8px 14px;border:none;background:#10B981;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600"
+    okBtn.onclick = () => {
+      hideOverlay()
+      resolve("continue")
+    }
+    actions.appendChild(okBtn)
+    panel.appendChild(actions)
+
+    backdrop.appendChild(panel)
+    document.body.appendChild(backdrop)
+  })
+}
+
+function buildPayload(courses, downloads) {
+  return courses.map((c, ci) => ({
+    course_code: c.course_code,
+    course_name: c.course_name,
+    course_url: c.course_url,
+    events: c.events,
+    files: c.files,
+    page_content: {
+      text: c.pageText || "",
+      images: downloads.imagesByCourse.get(ci) || [],
+    },
+    downloaded_files: downloads.filesByCourse.get(ci) || [],
+  }))
 }
