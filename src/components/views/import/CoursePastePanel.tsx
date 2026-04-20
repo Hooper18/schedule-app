@@ -31,13 +31,20 @@ const PALETTE = [
 interface Props {
   semester: Semester
   onSaved: () => void
+  initialCandidates?: ParsedCourse[]
 }
 
-export default function CoursePastePanel({ semester, onSaved }: Props) {
+export default function CoursePastePanel({
+  semester,
+  onSaved,
+  initialCandidates,
+}: Props) {
   const { user } = useAuth()
   const { parseCourseTimetable, loading, error } = useClaude()
   const [input, setInput] = useState('')
-  const [candidates, setCandidates] = useState<ParsedCourse[]>([])
+  const [candidates, setCandidates] = useState<ParsedCourse[]>(
+    initialCandidates ?? [],
+  )
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)

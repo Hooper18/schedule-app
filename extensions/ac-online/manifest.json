@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "XMUM AC Online → Schedule App",
+  "version": "0.1.0",
+  "description": "一键把 XMUM AC Online 课程表导入 schedule-app (calendar.tuchenguang.com)",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ac.xmu.edu.my/student/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

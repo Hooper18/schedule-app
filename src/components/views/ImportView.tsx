@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { CalendarDays, BookOpen, FileUp, Plus } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
+import type { ParsedCourse } from '../../hooks/useClaude'
 import AddEventForm from './import/AddEventForm'
 import AddCourseForm from './import/AddCourseForm'
 import QuickAddPanel from './import/QuickAddPanel'
@@ -23,8 +25,33 @@ export default function ImportView() {
   const { semester } = useSemester()
   const { courses, reload: reloadCourses } = useCourses(semester?.id)
   const { reload: reloadEvents } = useEvents(semester?.id)
-  const [importTab, setImportTab] = useState<ImportTab>('calendar')
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Decode the Chrome-extension payload once on mount. Synchronous so the
+  // first render already has candidates ready and can default to the schedule
+  // tab.
+  const acData = useMemo(
+    () => decodeAcData(searchParams.get('ac_data')),
+    // deps intentionally empty — we only honour the param present at mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const [importTab, setImportTab] = useState<ImportTab>(
+    acData ? 'schedule' : 'calendar',
+  )
   const [manualTab, setManualTab] = useState<ManualTab>('event')
+
+  // Strip ac_data from the URL so a page reload doesn't re-populate candidates
+  // after the user has already saved or dismissed them.
+  useEffect(() => {
+    if (searchParams.has('ac_data')) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('ac_data')
+      setSearchParams(next, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!semester) {
     return (
@@ -68,6 +95,7 @@ export default function ImportView() {
               reloadCourses()
               reloadEvents()
             }}
+            initialCandidates={acData?.courses}
           />
         )}
         {importTab === 'file' && (
@@ -111,4 +139,29 @@ export default function ImportView() {
       </section>
     </div>
   )
+}
+
+// Payload shape produced by the AC Online Chrome extension. The extension
+// base64-encodes JSON.stringify({ courses, ... }) after UTF-8 encoding, so the
+// CJK course names survive the round-trip.
+interface AcDataPayload {
+  courses: ParsedCourse[]
+}
+
+function decodeAcData(b64: string | null): AcDataPayload | null {
+  if (!b64) return null
+  try {
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    const json = new TextDecoder().decode(bytes)
+    const parsed = JSON.parse(json) as AcDataPayload
+    if (!parsed || !Array.isArray(parsed.courses)) return null
+    return parsed
+  } catch (err) {
+    console.error('Failed to decode ac_data payload', err)
+    return null
+  }
 }
