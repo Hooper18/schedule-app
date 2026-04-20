@@ -418,16 +418,22 @@ ${calendarText}
 == Teaching week lookup table (look up, DO NOT compute) ==
 ${weekTable}
 
-Date rules:
-- If the document contains an explicit absolute calendar date (e.g. "22 MAY 2026", "3 July 2026"), use it as-is. date_inferred=false.
-- If the document says "Week N" with NO specific weekday → read the end_date for that row in the lookup table above (the week's last day, i.e. the Saturday). NEVER compute this yourself. date_inferred=true, date_source="Week N".
-- If the document says "Week N <weekday>" (e.g. "Week 5 Friday") → use the matching weekday within Week N's date range from the lookup table. date_inferred=true, date_source="Week N <weekday>".
-- If Week N is NOT present in the lookup table (table shows "(no teaching-week rows provided)" or the specific week is missing), leave date=null. date_inferred=false.
-- "Final Exam" / "Final Examination" with no explicit date → use the FIRST DAY of the [exam] row in the academic calendar above. date_inferred=true, date_source="Examination Week". If there is no [exam] row, leave date null.
-- "Midterm" without an explicit date → leave date null (do NOT guess). date_inferred=false.
+Three event classes (by date precision) — every emitted event belongs to exactly one class, determined SOLELY by what the document says about timing:
+- CLASS A (explicit date): the document contains a concrete calendar date (e.g. "22 May 2026"). date=YYYY-MM-DD, date_inferred=false, date_source=null. UI renders normally on the calendar.
+- CLASS B (inferred date): the document gives ONLY a Week-N reference (with or without a weekday), OR explicitly ties the event to the examination period / exam week via a TEMPORAL phrase. date=inferred YYYY-MM-DD via the lookup tables below, date_inferred=true, date_source set ("Week 12" / "Week 5 Friday" / "Examination Week"). UI renders on the calendar with a yellow "inferred date" warning.
+- CLASS C (no date): the document gives no date, no Week reference, no exam-week temporal reference, OR explicitly says "TBA"/"TBD"/"待定"/"To be announced"/"TBC". date=null, date_inferred=false, date_source=null. UI does NOT render these on the calendar — they stay in the event list only.
+
+Date rules (apply in order):
+- Explicit absolute calendar date in the document (e.g. "22 MAY 2026", "3 July 2026") → CLASS A. date=as-is.
+- "Week N" with NO specific weekday → CLASS B. Look up the end_date for that row in the Teaching week lookup table (the week's Saturday). NEVER compute this yourself. date_source="Week N".
+- "Week N <weekday>" (e.g. "Week 5 Friday") → CLASS B. Use the matching weekday within Week N's date range from the lookup table. date_source="Week N <weekday>".
+- Week N NOT in the lookup table (table shows "(no teaching-week rows provided)" or the specific week row is missing) → CLASS C (date=null).
+- Event EXPLICITLY tied to the examination period by a TEMPORAL phrase — "during examination period", "held in exam week", "scheduled in final exam week", "during the examination block" — → CLASS B. date=FIRST DAY of the [exam] row in the academic calendar above. date_source="Examination Week". If there is no [exam] row, fall back to CLASS C.
+- IMPORTANT — simply MENTIONING "Final Exam" / "Final Examination" / "Midterm" as the event NAME, without any temporal reference and without a specific date, does NOT trigger exam-week inference. Leave date=null (CLASS C). Do NOT auto-fill to the exam week's first day. Do NOT guess.
+- "TBA" / "TBD" / "To be announced" / "待定" / "TBC" → CLASS C (date=null).
+- No date AND no Week reference AND no exam-week temporal phrase → CLASS C (date=null). Do NOT invent a date.
 - Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly places them there.
 - Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
-- If the document mentions no date AND no Week reference, leave date=null. date_inferred=false. Do NOT invent a date.
 - Times use 24-hour HH:MM. "3pm" → "15:00".
 
 Available courses (match course_code ↔ course_id from this list):
@@ -435,36 +441,47 @@ ${courseList}
 
 Extraction guidelines:
 - Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, revision session, or milestone mentioned in the text.
-- Multiple instances of the same event type (e.g. "Quiz 1", "Quiz 2", "Quiz 3") → separate entries.
 - CRITICAL — category vs. sub-item weights (check FIRST, before splitting): distinguish grading CATEGORIES (umbrella headings like "Coursework 20%", "Continuous Assessment 40%", "Examination 80%") from actual ASSESSMENT items (quizzes, assignments, midterm, final, lab reports, presentations). Detection rule: if an item has specific sub-items listed beneath/under it, each with its own name (and usually its own weight), the outer item IS A CATEGORY — SKIP IT and only emit the sub-items. Examples:
     * "Coursework 20% → Quizzes 10%, Assignment 10%" → emit Quizzes 10% and Assignment 10%. DO NOT emit Coursework 20%.
     * "Examination 80% → Midterm 30%, Final 50%" → emit Midterm 30% and Final 50%. DO NOT emit Examination 80%.
     * "Continuous Assessment 60% → Quiz 1 10%, Quiz 2 10%, Assignment 1 20%, Assignment 2 20%" → emit the four sub-items, SKIP Continuous Assessment.
   Judgement standard: if an item has concrete sub-assessments listed under it, it is a category → skip. Only emit leaf-level assessment items.
   If an item has NO sub-items (just a single name + weight, no further breakdown), it IS the leaf assessment — emit it directly.
-  Emitting both the category and its sub-items double-counts weight and pushes the course total above 100%.
-- Split every distinctly-named leaf assessment into its own event. "Quiz 1", "Quiz 2", "Quiz 3" → three events. Never merge independent leaf assessments into another event's notes field.
+  Emitting both a category and its sub-items double-counts weight and pushes the course total above 100%.
+- Split every distinctly-named leaf assessment into its own event by DEFAULT. "Quiz 1" with Week 3, "Quiz 2" with Week 7 → two separate events. Never merge leaf assessments that have dates into another event's notes field.
+- MERGE RULE for CLASS C sub-items (apply ONLY when ALL three conditions hold): inside the SAME grading category, multiple leaf items of the SAME TYPE (e.g. 3 Quizzes, 4 Lab Reports), every single one of which has NO date information at all (all CLASS C) → collapse them into ONE merged event.
+    * title: plural form + count, e.g. "Quizzes (×3)", "Lab Reports (×4)".
+    * weight: sum of the individual sub-weights if each sub-item has its own weight. If sub-weights are NOT individually given, compute as [category total weight] − [sum of weights of other sub-items from the same category that you are emitting as separate events]. Example: "Coursework 20% { Group Assignment 5% [Week 12], 3 Quizzes [no dates, no individual weights] }" → Group Assignment is a separate event (CLASS B, 5%); the 3 Quizzes merge into one event with weight = 20% − 5% = 15%.
+    * date=null, date_inferred=false, date_source=null.
+    * notes: short description of what was merged, e.g. "3 quizzes, no dates specified".
+  DIFFERENT event types stay SEPARATE even when all CLASS C: Midterm ≠ Final ≠ Assignment ≠ Quiz ≠ Lab Report. Two CLASS C events of different types → TWO separate events; never one merged "exams" or "assessments" event.
+  MIXED classes stay SEPARATE: if one Quiz has a Week reference (CLASS B) and the others have no dates (CLASS C), emit the dated Quiz separately; merge the remaining CLASS C Quizzes only if 2 or more still remain.
 - CROSS-FILE DEDUPLICATION (when multiple files are provided): different files may describe the SAME assessment under different names. If two candidate events have (a) the same course, (b) similar titles (e.g. "Assignment 1: Web Analysis" vs "Group Assignment 1" vs "Individual Assignment 1 — Web"), AND (c) the same or very similar weight, merge them into ONE event. Keep the version with the most complete information: prefer an explicit date over a missing one, prefer a more descriptive title, prefer a filled-in time/notes/is_group flag over null. Do NOT emit two events for what is clearly one real assessment.
 - DO NOT extract consultation hours, office hours, or 答疑时间. Those are recurring course availability metadata, not scheduling events.
 - DO NOT extract generic lecture sessions or weekly tutorial slots that lack a specific date — those belong on the course timetable, not the event list.
 - For each event:
-  - title: short, human-readable. "Quiz 3" / "Final Exam" / "Assignment 2 submission" / "Lab 4 report".
+  - title: short, human-readable. "Quiz 3" / "Final Exam" / "Assignment 2 submission" / "Lab 4 report". Merged CLASS C events use the "<Type>s (×N)" form.
   - type: most specific match from the enum. "Final" → exam, "Midterm" → midterm, "Lab report" → lab_report, "Video submission" → video_submission, generic "assignment due" → deadline.
-  - date: absolute YYYY-MM-DD, or null if the document genuinely doesn't say (and no Week-N hint + no "Final Exam" shortcut applies).
+  - date: absolute YYYY-MM-DD for CLASS A and CLASS B. null for CLASS C.
   - time: 24h HH:MM if given; null otherwise.
-  - weight: as shown ("15%", "20 marks") if given; null otherwise.
+  - weight: as shown in the document ("15%", "20 marks") for individual leaf items. For MERGE RULE events, use the computed sum/residual weight (see MERGE RULE). Null only when no weight can be determined.
   - is_group: true ONLY if the text explicitly says group / team / 小组 / pair.
-  - course_id: UUID from the course list above. Try to match the document's course code (e.g. "COM112") to an entry — match on code case-insensitively. Leave null if no confident match.
-  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. EXCEPTION: when the parent-child rule above applies, put the sub-components' breakdown here (format: "Sales Letter 10%; Poster 10%; Audience Profile 5%"). Outside that case, do NOT carry other independent assessments' weights in notes — each independent weighted item has its own event.
-  - date_inferred (REQUIRED on every event, even when date is null): boolean.
-      * true when you computed the date from a Week-N reference, or from an academic-calendar anchor such as "Final Exam" → examination week start.
-      * false when the document contains an explicit calendar date (e.g. "22 MAY 2026", "Week 3 · May 22 2026" — because the explicit date is present).
-      * false when date is null (no inference was performed).
+  - course_id: UUID from the course list above. Match the document's course code (e.g. "COM112") to an entry case-insensitively. Leave null if no confident match.
+  - notes: short extra context (platform, special instructions, room). Keep under ~120 chars. Null if nothing useful. EXCEPTION: for MERGE RULE events, put the merge description here (e.g. "3 quizzes, no dates specified"). Do NOT use notes to carry other leaf assessments' weights — each leaf has its own event.
+  - date_inferred (REQUIRED on every event): boolean.
+      * true for CLASS B (Week-N references of any form, explicit exam-week temporal references).
+      * false for CLASS A (explicit calendar date) and for CLASS C (no inference was performed).
   - date_source (REQUIRED on every event; null unless date_inferred is true): string or null.
-      * When date_inferred=true, put a short label of the original reference that produced the date: "Week 13", "Week 5 Friday", "Examination Week", "Revision Week".
+      * When date_inferred=true: a short label of the reference that produced the date — "Week 13", "Week 5 Friday", "Examination Week".
       * Otherwise null.
 - Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
-- WEIGHT SANITY CHECK (run before returning): for each course_id, sum the numeric weights of all events you are about to emit for that course. If the sum EXCEEDS 100%, something is wrong — you have double-counted a category alongside its sub-items, or you have failed to merge cross-file duplicates. Fix it by removing category-level entries (per the CATEGORY rule above) or by merging duplicates (per the CROSS-FILE rule above) until every course's total weight is ≤ 100%. Never return events whose per-course weight sum exceeds 100%.
+- WEIGHT SANITY CHECK (run before returning): for each course_id, sum the numeric weights of all events you are about to emit for that course. If the sum EXCEEDS 100%, something is wrong — you have double-counted a category alongside its sub-items, failed to merge cross-file duplicates, or failed to apply the MERGE RULE. Fix by removing category-level entries (per the CATEGORY rule), merging duplicates (per the CROSS-FILE rule), or merging same-type CLASS C sub-items (per the MERGE RULE) until every course's total weight is ≤ 100%.
+- WORKED EXAMPLE — input: "Coursework 20% (3 Quizzes + Group Assignment 5%, due Week 12). Examination 80% (Midterm 30% + Final 50%, TBA)." Correct output (all events for the same course_id):
+    * Quizzes (×3), type=quiz, weight="15%" (20% − 5%), date=null, date_inferred=false, date_source=null, notes="3 quizzes, no dates specified". → CLASS C merged.
+    * Group Assignment, type=deadline, weight="5%", date=Saturday of Week 12 from the lookup table, date_inferred=true, date_source="Week 12", is_group=true. → CLASS B.
+    * Midterm, type=midterm, weight="30%", date=null, date_inferred=false, date_source=null. → CLASS C (kept separate from Final — different types).
+    * Final Exam, type=exam, weight="50%", date=null, date_inferred=false, date_source=null. → CLASS C (TBA means no date, do NOT infer exam week from name alone).
+  Per-course total: 15 + 5 + 30 + 50 = 100 ✓. Coursework 20% and Examination 80% are CATEGORIES → NOT emitted.
 - Always call record_events exactly once.`
 }
 
@@ -719,9 +736,7 @@ Deno.serve(async (req) => {
     tool = recordEventsTool
     forcedToolName = "record_events"
     maxTokens = 8192
-    // File import reasons over long, messy syllabus text with category/sub-item
-    // weight nesting and cross-file dedup — worth the stronger model.
-    model = "claude-sonnet-4-6"
+    model = "claude-haiku-4-5-20251001"
   } else if (action === "course_import") {
     systemPrompt = buildCourseImportSystemPrompt()
     tool = recordCoursesTool
