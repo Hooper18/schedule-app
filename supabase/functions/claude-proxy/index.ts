@@ -539,9 +539,21 @@ type FileImportEvent = {
   date_source?: string | null
 }
 
-// Post-process file_import events: merge same-course + same-type + date=null
-// events (2+) into a single aggregate so the UI stays stable regardless of
-// whether Claude emitted them split or merged.
+const formatPct = (n: number): string =>
+  `${Number.isInteger(n) ? n : n.toFixed(1)}%`
+
+const parsePct = (w: string | null | undefined): number | null => {
+  if (!w) return null
+  const m = w.match(/([\d.]+)\s*%/)
+  return m ? parseFloat(m[1]) : null
+}
+
+// Post-process file_import events: (1) merge same-course + same-type + date=null
+// events (2+) into a single aggregate; (2) if a course's total weight exceeds
+// 100%, absorb the overage by re-setting the merged event's weight to the
+// residual (100% − sum of other events). Keeps UI stable regardless of whether
+// Claude emitted the sub-items split or merged, and whether its weight sum
+// overshot.
 function postProcessEvents(events: FileImportEvent[]): FileImportEvent[] {
   const groups = new Map<string, FileImportEvent[]>()
   const passthrough: FileImportEvent[] = []
@@ -561,15 +573,17 @@ function postProcessEvents(events: FileImportEvent[]): FileImportEvent[] {
     groups.set(key, arr)
   }
 
-  const out: FileImportEvent[] = [...passthrough]
+  const merged: FileImportEvent[] = [...passthrough]
   for (const group of groups.values()) {
     if (group.length < 2) {
-      out.push(...group)
+      merged.push(...group)
       continue
     }
-    out.push(mergeUndatedGroup(group))
+    merged.push(mergeUndatedGroup(group))
   }
-  return out
+
+  normalizeCourseWeights(merged)
+  return merged
 }
 
 function mergeUndatedGroup(group: FileImportEvent[]): FileImportEvent {
@@ -580,15 +594,12 @@ function mergeUndatedGroup(group: FileImportEvent[]): FileImportEvent {
   let totalPct = 0
   let anyPct = false
   for (const e of group) {
-    if (!e.weight) continue
-    const m = e.weight.match(/([\d.]+)\s*%/)
-    if (!m) continue
-    totalPct += parseFloat(m[1])
+    const pct = parsePct(e.weight)
+    if (pct === null) continue
+    totalPct += pct
     anyPct = true
   }
-  const weight = anyPct
-    ? `${Number.isInteger(totalPct) ? totalPct : totalPct.toFixed(1)}%`
-    : null
+  const weight = anyPct ? formatPct(totalPct) : null
 
   const noteSet = new Set<string>()
   for (const e of group) {
@@ -608,6 +619,43 @@ function mergeUndatedGroup(group: FileImportEvent[]): FileImportEvent {
     notes,
     date_inferred: false,
     date_source: null,
+  }
+}
+
+// For each course whose weighted events sum > 100%, find the single merged
+// event (title contains "×") and rewrite its weight to 100% − sum of the rest.
+// Mutates event objects in place. Skipped when a course has zero or multiple
+// merged events (ambiguous — we can't redistribute fairly).
+function normalizeCourseWeights(events: FileImportEvent[]): void {
+  const byCourse = new Map<string, FileImportEvent[]>()
+  for (const e of events) {
+    if (e.course_id == null) continue
+    const arr = byCourse.get(e.course_id) ?? []
+    arr.push(e)
+    byCourse.set(e.course_id, arr)
+  }
+
+  for (const group of byCourse.values()) {
+    let total = 0
+    for (const e of group) {
+      const pct = parsePct(e.weight)
+      if (pct !== null) total += pct
+    }
+    if (total <= 100) continue
+
+    const mergedEvents = group.filter((e) => e.title.includes("×"))
+    if (mergedEvents.length !== 1) continue
+
+    const target = mergedEvents[0]
+    let others = 0
+    for (const e of group) {
+      if (e === target) continue
+      const pct = parsePct(e.weight)
+      if (pct !== null) others += pct
+    }
+    const corrected = 100 - others
+    if (corrected < 0) continue
+    target.weight = formatPct(corrected)
   }
 }
 
