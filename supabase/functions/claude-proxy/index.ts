@@ -429,9 +429,10 @@ Date rules (apply in order):
 - "Week N <weekday>" (e.g. "Week 5 Friday") → CLASS B. Use the matching weekday within Week N's date range from the lookup table. date_source="Week N <weekday>".
 - Week N NOT in the lookup table (table shows "(no teaching-week rows provided)" or the specific week row is missing) → CLASS C (date=null).
 - Event EXPLICITLY tied to the examination period by a TEMPORAL phrase — "during examination period", "held in exam week", "scheduled in final exam week", "during the examination block" — → CLASS B. date=FIRST DAY of the [exam] row in the academic calendar above. date_source="Examination Week". If there is no [exam] row, fall back to CLASS C.
-- IMPORTANT — simply MENTIONING "Final Exam" / "Final Examination" / "Midterm" as the event NAME, without any temporal reference and without a specific date, does NOT trigger exam-week inference. Leave date=null (CLASS C). Do NOT auto-fill to the exam week's first day. Do NOT guess.
-- "TBA" / "TBD" / "To be announced" / "待定" / "TBC" → CLASS C (date=null).
-- No date AND no Week reference AND no exam-week temporal phrase → CLASS C (date=null). Do NOT invent a date.
+- FINAL EXAM DEFAULT (applies ONLY to type=exam, i.e. Final Exam / Final Examination): when the event is a Final Exam and the document does NOT give a specific date — whether it is silent about timing or explicitly says "TBA" / "TBD" — automatically place it on the FIRST DAY of the [exam] row in the academic calendar → CLASS B, date_inferred=true, date_source="Examination Week". If there is no [exam] row, fall back to CLASS C. This default applies ONLY to type=exam — it does NOT apply to Midterm, quizzes, assignments, or any other event type.
+- Midterm (type=midterm) and every OTHER non-exam event type mentioned by name without a specific date → CLASS C (date=null). Do NOT auto-fill Midterm or any non-Final-Exam event to the exam week — those events are held during teaching weeks, not the exam block. Do NOT guess.
+- "TBA" / "TBD" / "To be announced" / "待定" / "TBC" for non-exam events → CLASS C (date=null). (For type=exam, the FINAL EXAM DEFAULT above applies instead.)
+- No date AND no Week reference AND no exam-week temporal phrase, for non-exam events → CLASS C (date=null). Do NOT invent a date.
 - Respect the academic calendar above — do not schedule events inside holiday/exam/revision rows unless the document explicitly places them there.
 - Relative phrases ("next Wednesday" / "下周三") use the anchor table above.
 - Times use 24-hour HH:MM. "3pm" → "15:00".
@@ -480,7 +481,7 @@ Extraction guidelines:
     * Quizzes (×3), type=quiz, weight="15%" (20% − 5%), date=null, date_inferred=false, date_source=null, notes="3 quizzes, no dates specified". → CLASS C merged.
     * Group Assignment, type=deadline, weight="5%", date=Saturday of Week 12 from the lookup table, date_inferred=true, date_source="Week 12", is_group=true. → CLASS B.
     * Midterm, type=midterm, weight="30%", date=null, date_inferred=false, date_source=null. → CLASS C (kept separate from Final — different types).
-    * Final Exam, type=exam, weight="50%", date=null, date_inferred=false, date_source=null. → CLASS C (TBA means no date, do NOT infer exam week from name alone).
+    * Final Exam, type=exam, weight="50%", date=FIRST DAY of the [exam] row from the academic calendar, date_inferred=true, date_source="Examination Week". → CLASS B (FINAL EXAM DEFAULT: even when the document says TBA, type=exam auto-infers to the exam-week start).
   Per-course total: 15 + 5 + 30 + 50 = 100 ✓. Coursework 20% and Examination 80% are CATEGORIES → NOT emitted.
 - Always call record_events exactly once.`
 }
@@ -507,6 +508,107 @@ Extraction rules:
 - Normalize course codes (trim whitespace, uppercase). Do NOT invent missing codes.
 - If no courses can be parsed, return an empty courses array.
 - Always call record_courses exactly once.`
+}
+
+// Plural labels for merged same-type undated events. Falls back to `${type}s`.
+const TYPE_PLURALS: Record<string, string> = {
+  quiz: "Quizzes",
+  lab_report: "Lab Reports",
+  deadline: "Assignments",
+  presentation: "Presentations",
+  tutorial: "Tutorials",
+  exam: "Final Exams",
+  midterm: "Midterms",
+  video_submission: "Video Submissions",
+  consultation: "Consultations",
+  holiday: "Holidays",
+  revision: "Revisions",
+  milestone: "Milestones",
+}
+
+type FileImportEvent = {
+  course_id: string | null
+  title: string
+  type: string
+  date: string | null
+  time: string | null
+  weight: string | null
+  is_group: boolean
+  notes: string | null
+  date_inferred?: boolean
+  date_source?: string | null
+}
+
+// Post-process file_import events: merge same-course + same-type + date=null
+// events (2+) into a single aggregate so the UI stays stable regardless of
+// whether Claude emitted them split or merged.
+function postProcessEvents(events: FileImportEvent[]): FileImportEvent[] {
+  const groups = new Map<string, FileImportEvent[]>()
+  const passthrough: FileImportEvent[] = []
+
+  for (const e of events) {
+    if (e.date !== null) {
+      passthrough.push(e)
+      continue
+    }
+    if (e.course_id == null || !e.type) {
+      passthrough.push(e)
+      continue
+    }
+    const key = `${e.course_id}::${e.type}`
+    const arr = groups.get(key) ?? []
+    arr.push(e)
+    groups.set(key, arr)
+  }
+
+  const out: FileImportEvent[] = [...passthrough]
+  for (const group of groups.values()) {
+    if (group.length < 2) {
+      out.push(...group)
+      continue
+    }
+    out.push(mergeUndatedGroup(group))
+  }
+  return out
+}
+
+function mergeUndatedGroup(group: FileImportEvent[]): FileImportEvent {
+  const first = group[0]
+  const count = group.length
+  const plural = TYPE_PLURALS[first.type] ?? `${first.type}s`
+
+  let totalPct = 0
+  let anyPct = false
+  for (const e of group) {
+    if (!e.weight) continue
+    const m = e.weight.match(/([\d.]+)\s*%/)
+    if (!m) continue
+    totalPct += parseFloat(m[1])
+    anyPct = true
+  }
+  const weight = anyPct
+    ? `${Number.isInteger(totalPct) ? totalPct : totalPct.toFixed(1)}%`
+    : null
+
+  const noteSet = new Set<string>()
+  for (const e of group) {
+    const n = e.notes?.trim()
+    if (n) noteSet.add(n)
+  }
+  const notes = noteSet.size > 0 ? [...noteSet].join("; ") : null
+
+  return {
+    course_id: first.course_id,
+    title: `${plural} (×${count})`,
+    type: first.type,
+    date: null,
+    time: null,
+    weight,
+    is_group: group.some((e) => e.is_group),
+    notes,
+    date_inferred: false,
+    date_source: null,
+  }
 }
 
 async function verifyUser(
@@ -782,10 +884,17 @@ Deno.serve(async (req) => {
       )
     }
 
+    const toolInput = toolUse.input as Record<string, unknown>
+    if (action === "file_import" && Array.isArray(toolInput.events)) {
+      toolInput.events = postProcessEvents(
+        toolInput.events as FileImportEvent[],
+      )
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
-        ...(toolUse.input as Record<string, unknown>),
+        ...toolInput,
         usage: response.usage,
       }),
       { status: 200, headers: JSON_HEADERS },
