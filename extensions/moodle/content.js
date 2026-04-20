@@ -108,7 +108,11 @@ async function scanDashboard() {
     seenUrls.add(url)
     const nameEl = card.querySelector("span.multiline")
     const nameHint = nameEl ? nameEl.textContent.trim() : null
-    items.push({ url, nameHint })
+    // span.multiline often holds only "CODE Short Name"; the lecturer and
+    // "YYYY/MM" semester tag usually live in sibling elements. Use the full
+    // card text for semester detection.
+    const detectText = (card.textContent || "").replace(/\s+/g, " ").trim()
+    items.push({ url, nameHint, detectText })
   }
 
   if (items.length === 0) {
@@ -116,11 +120,35 @@ async function scanDashboard() {
     return []
   }
 
-  // Filter by current semester — course names embed a "YYYY/MM" semester tag.
+  console.log(
+    "[schedule-app/moodle] scanDashboard collected",
+    items.length,
+    "course cards",
+  )
+  items.forEach((it, i) => {
+    console.log(
+      `  [${i}] nameHint="${it.nameHint}" | detectText="${it.detectText.slice(0, 160)}"`,
+    )
+  })
+
+  // Filter by current semester — course cards embed a "YYYY/MM" semester tag.
   // Pick the most common tag on this dashboard as "current" and drop courses
   // tagged with any other semester. Courses without a tag are kept (unknown).
   const currentSem = detectCurrentSemester(items)
+  console.log(
+    "[schedule-app/moodle] detected current semester:",
+    currentSem,
+  )
+
   const { filtered, skipped } = filterCurrentSemester(items, currentSem)
+  console.log(
+    `[schedule-app/moodle] filter result: kept ${filtered.length}, skipped ${skipped}`,
+  )
+  items.forEach((it) => {
+    const keep = filtered.includes(it)
+    console.log(`  ${keep ? "KEEP" : "DROP"} "${it.nameHint}"`)
+  })
+
   if (currentSem && skipped > 0) {
     setProgress(
       btn,
@@ -128,6 +156,12 @@ async function scanDashboard() {
     )
     await sleep(900)
   }
+
+  console.log(
+    "[schedule-app/moodle] starting fetch loop for",
+    filtered.length,
+    "courses",
+  )
 
   const results = []
   for (let i = 0; i < filtered.length; i++) {
@@ -148,14 +182,35 @@ async function scanDashboard() {
 
 const SEMESTER_REGEX = /(\d{4}\/\d{2})/
 
+// Activity titles that look like deadlines but are really teacher-uploaded
+// post-assessment artifacts. Matched case-insensitively as substrings.
+const TITLE_BLACKLIST = [
+  "marks",
+  "solutions",
+  "answers",
+  "formula sheet",
+  "answer key",
+  "marking scheme",
+  "sample answer",
+]
+
+function isBlacklistedTitle(title) {
+  const lower = title.toLowerCase()
+  return TITLE_BLACKLIST.some((kw) => lower.includes(kw))
+}
+
 function detectCurrentSemester(items) {
   const counts = new Map()
   for (const it of items) {
-    if (!it.nameHint) continue
-    const m = it.nameHint.match(SEMESTER_REGEX)
+    const text = it.detectText || it.nameHint || ""
+    const m = text.match(SEMESTER_REGEX)
     if (!m) continue
     counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
   }
+  console.log(
+    "[schedule-app/moodle] semester counts:",
+    Object.fromEntries(counts),
+  )
   let best = null
   let bestCount = 0
   for (const [sem, n] of counts) {
@@ -172,11 +227,8 @@ function filterCurrentSemester(items, currentSem) {
   const kept = []
   let skipped = 0
   for (const it of items) {
-    if (!it.nameHint) {
-      kept.push(it)
-      continue
-    }
-    const m = it.nameHint.match(SEMESTER_REGEX)
+    const text = it.detectText || it.nameHint || ""
+    const m = text.match(SEMESTER_REGEX)
     if (!m || m[1] === currentSem) {
       kept.push(it)
     } else {
@@ -222,6 +274,13 @@ function parseCourse(docOrHtml, courseUrl, nameHint) {
       clone.querySelectorAll(".accesshide").forEach((el) => el.remove())
       const title = (clone.textContent || "").trim()
       if (!title) continue
+      if (isBlacklistedTitle(title)) {
+        console.log(
+          "[schedule-app/moodle] skipping blacklisted activity:",
+          title,
+        )
+        continue
+      }
 
       const { date, time } = parseDate(w.innerHTML)
       if (date && date < todayIso) continue
