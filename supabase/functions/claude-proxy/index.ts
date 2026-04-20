@@ -436,8 +436,15 @@ ${courseList}
 Extraction guidelines:
 - Extract EVERY exam, midterm, quiz, assignment/deadline, lab report, video submission, presentation, revision session, or milestone mentioned in the text.
 - Multiple instances of the same event type (e.g. "Quiz 1", "Quiz 2", "Quiz 3") → separate entries.
-- CRITICAL — parent-child assessments (check FIRST, before splitting): some assessments are shown as a parent with its own total weight AND a breakdown of sub-components. Detection rule: the sub-components' individual weights sum EXACTLY to the parent's weight. Example: "Assignment 2 (25%) — Sales Letter 10%, Poster 10%, Audience Profile 5%" (10 + 10 + 5 = 25 → matches parent). In that case emit ONLY the parent event (title="Assignment 2", weight="25%") and put the sub-components' breakdown in the notes field ("Sales Letter 10%; Poster 10%; Audience Profile 5%"). DO NOT also emit the sub-components as separate events — that would double-count weights and push the total above 100%. If the sub-weights do NOT sum to the parent weight, treat the items as independent (fall through to the next rule).
-- Otherwise, split every distinctly-weighted assessment into its own event: when weighted items are listed without a matching parent total, each becomes its own event. Example: "Sales Letter (10%), Poster (10%), Audience Profile (5%)" with NO overarching "Assignment 2, 25%" → THREE separate events. Never merge independent weighted items into another event's notes field.
+- CRITICAL — category vs. sub-item weights (check FIRST, before splitting): distinguish grading CATEGORIES (umbrella headings like "Coursework 20%", "Continuous Assessment 40%", "Examination 80%") from actual ASSESSMENT items (quizzes, assignments, midterm, final, lab reports, presentations). Detection rule: if an item has specific sub-items listed beneath/under it, each with its own name (and usually its own weight), the outer item IS A CATEGORY — SKIP IT and only emit the sub-items. Examples:
+    * "Coursework 20% → Quizzes 10%, Assignment 10%" → emit Quizzes 10% and Assignment 10%. DO NOT emit Coursework 20%.
+    * "Examination 80% → Midterm 30%, Final 50%" → emit Midterm 30% and Final 50%. DO NOT emit Examination 80%.
+    * "Continuous Assessment 60% → Quiz 1 10%, Quiz 2 10%, Assignment 1 20%, Assignment 2 20%" → emit the four sub-items, SKIP Continuous Assessment.
+  Judgement standard: if an item has concrete sub-assessments listed under it, it is a category → skip. Only emit leaf-level assessment items.
+  If an item has NO sub-items (just a single name + weight, no further breakdown), it IS the leaf assessment — emit it directly.
+  Emitting both the category and its sub-items double-counts weight and pushes the course total above 100%.
+- Split every distinctly-named leaf assessment into its own event. "Quiz 1", "Quiz 2", "Quiz 3" → three events. Never merge independent leaf assessments into another event's notes field.
+- CROSS-FILE DEDUPLICATION (when multiple files are provided): different files may describe the SAME assessment under different names. If two candidate events have (a) the same course, (b) similar titles (e.g. "Assignment 1: Web Analysis" vs "Group Assignment 1" vs "Individual Assignment 1 — Web"), AND (c) the same or very similar weight, merge them into ONE event. Keep the version with the most complete information: prefer an explicit date over a missing one, prefer a more descriptive title, prefer a filled-in time/notes/is_group flag over null. Do NOT emit two events for what is clearly one real assessment.
 - DO NOT extract consultation hours, office hours, or 答疑时间. Those are recurring course availability metadata, not scheduling events.
 - DO NOT extract generic lecture sessions or weekly tutorial slots that lack a specific date — those belong on the course timetable, not the event list.
 - For each event:
@@ -457,6 +464,7 @@ Extraction guidelines:
       * When date_inferred=true, put a short label of the original reference that produced the date: "Week 13", "Week 5 Friday", "Examination Week", "Revision Week".
       * Otherwise null.
 - Do NOT invent events. If the text is empty or has no scheduling content, return an empty events array.
+- WEIGHT SANITY CHECK (run before returning): for each course_id, sum the numeric weights of all events you are about to emit for that course. If the sum EXCEEDS 100%, something is wrong — you have double-counted a category alongside its sub-items, or you have failed to merge cross-file duplicates. Fix it by removing category-level entries (per the CATEGORY rule above) or by merging duplicates (per the CROSS-FILE rule above) until every course's total weight is ≤ 100%. Never return events whose per-course weight sum exceeds 100%.
 - Always call record_events exactly once.`
 }
 
