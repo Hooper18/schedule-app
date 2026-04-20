@@ -707,6 +707,7 @@ Deno.serve(async (req) => {
   let tool: typeof recordEventsTool | typeof recordCoursesTool
   let forcedToolName: string
   let maxTokens: number
+  let model: string
   if (action === "file_import") {
     systemPrompt = buildFileImportSystemPrompt(
       courses,
@@ -718,17 +719,22 @@ Deno.serve(async (req) => {
     tool = recordEventsTool
     forcedToolName = "record_events"
     maxTokens = 8192
+    // File import reasons over long, messy syllabus text with category/sub-item
+    // weight nesting and cross-file dedup — worth the stronger model.
+    model = "claude-sonnet-4-6-20250514"
   } else if (action === "course_import") {
     systemPrompt = buildCourseImportSystemPrompt()
     tool = recordCoursesTool
     forcedToolName = "record_courses"
     maxTokens = 8192
+    model = "claude-haiku-4-5-20251001"
   } else {
     // quick_add — unchanged path
     systemPrompt = buildSystemPrompt(courses, today, week1Start)
     tool = recordEventsTool
     forcedToolName = "record_events"
     maxTokens = 4096
+    model = "claude-haiku-4-5-20251001"
   }
 
   console.log(
@@ -740,7 +746,7 @@ Deno.serve(async (req) => {
     // keep forced tool_choice (guarantees structured output) and skip
     // thinking — extraction is simple enough without it.
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model,
       max_tokens: maxTokens,
       system: systemPrompt,
       tools: [tool],
