@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Loader2,
   Paperclip,
+  Pencil,
   Triangle,
 } from 'lucide-react'
 import Modal from '../../shared/Modal'
@@ -88,8 +89,14 @@ export default function MoodleImportPanel({
   const [err, setErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
+  // overrideCodes[ci] === undefined → use Moodle-extracted code; anything else
+  // (including empty string) wins. Empty string is treated as "user cleared
+  // the code" i.e. force unmatched.
+  const [overrideCodes, setOverrideCodes] = useState<Record<number, string>>({})
+  const [editingIdx, setEditingIdx] = useState<number | null>(null)
 
-  // Auto-select all events when a new payload arrives.
+  // Auto-select all events when a new payload arrives; also drop any overrides
+  // from a previous scan since course indices may no longer line up.
   useEffect(() => {
     if (!moodleData) return
     const next: Record<string, boolean> = {}
@@ -102,6 +109,8 @@ export default function MoodleImportPanel({
     setFilesOpen({})
     setOkMsg(null)
     setErr(null)
+    setOverrideCodes({})
+    setEditingIdx(null)
   }, [moodleData])
 
   const coursesByCode = useMemo(() => {
@@ -115,6 +124,27 @@ export default function MoodleImportPanel({
   const matchCourse = (code: string | null): Course | null => {
     if (!code) return null
     return coursesByCode.get(code.toUpperCase()) ?? null
+  }
+
+  const resolveCourse = (
+    ci: number,
+    originalCode: string | null,
+  ): { effectiveCode: string | null; matched: Course | null } => {
+    const override = overrideCodes[ci]
+    const effectiveCode =
+      override !== undefined ? (override || null) : originalCode
+    return { effectiveCode, matched: matchCourse(effectiveCode) }
+  }
+
+  const commitOverride = (ci: number, raw: string) => {
+    const trimmed = raw.trim().toUpperCase()
+    setOverrideCodes((prev) => {
+      const next = { ...prev }
+      if (!trimmed) delete next[ci]
+      else next[ci] = trimmed
+      return next
+    })
+    setEditingIdx(null)
   }
 
   const totals = useMemo(() => {
@@ -168,7 +198,7 @@ export default function MoodleImportPanel({
 
     const rawRows: EventRow[] = []
     moodleData.forEach((mc, ci) => {
-      const matched = matchCourse(mc.course_code)
+      const { matched } = resolveCourse(ci, mc.course_code)
       mc.events.forEach((me, ei) => {
         if (!selected[`${ci}:${ei}`]) return
         rawRows.push({
@@ -341,11 +371,12 @@ export default function MoodleImportPanel({
 
       <div className="space-y-3">
         {moodleData.map((mc, ci) => {
-          const matched = matchCourse(mc.course_code)
+          const { effectiveCode, matched } = resolveCourse(ci, mc.course_code)
           const filesExpanded = !!filesOpen[ci]
           const courseAllChecked = mc.events.every(
             (_, ei) => selected[`${ci}:${ei}`],
           )
+          const isEditing = editingIdx === ci
           return (
             <div
               key={`${mc.course_code ?? 'null'}-${ci}`}
@@ -367,16 +398,52 @@ export default function MoodleImportPanel({
                         aria-label="课程未匹配"
                       />
                     )}
-                    <span className="text-sm font-medium text-text truncate">
-                      {mc.course_name || mc.course_code || '未命名课程'}
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        autoFocus
+                        defaultValue={effectiveCode ?? ''}
+                        onBlur={(e) =>
+                          commitOverride(ci, e.currentTarget.value)
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitOverride(
+                              ci,
+                              (e.target as HTMLInputElement).value,
+                            )
+                          } else if (e.key === 'Escape') {
+                            setEditingIdx(null)
+                          }
+                        }}
+                        placeholder="课程代码"
+                        className="w-24 px-1.5 py-0.5 text-[11px] font-bold rounded bg-main border border-accent text-text focus:outline-none"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingIdx(ci)
+                        }}
+                        className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-hover text-dim hover:text-text"
+                        aria-label="编辑课程代码"
+                      >
+                        {effectiveCode || '未识别'}
+                        <Pencil size={9} />
+                      </button>
+                    )}
+                    <span className="text-sm font-medium text-text truncate min-w-0">
+                      {mc.course_name || '未命名课程'}
                     </span>
                   </div>
                   <div className="mt-0.5 text-[11px] text-dim">
                     {matched
                       ? `→ ${matched.code} ${matched.name}`
-                      : mc.course_code
-                        ? `未匹配到课程代码 ${mc.course_code}，将以 course_id=null 导入`
-                        : '无法识别课程代码，将以 course_id=null 导入'}
+                      : effectiveCode
+                        ? `未匹配到课程代码 ${effectiveCode}，可点击编辑改成其他 code`
+                        : '无法识别课程代码，点击"未识别"手动输入'}
                   </div>
                 </div>
                 {mc.events.length > 0 && (
