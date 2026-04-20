@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { CalendarDays, BookOpen, FileUp, Plus } from 'lucide-react'
+import { CalendarDays, BookOpen, FileUp, Plus, GraduationCap } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
@@ -11,14 +11,18 @@ import QuickAddPanel from './import/QuickAddPanel'
 import FileImportPanel from './import/FileImportPanel'
 import CalendarPanel from './import/CalendarPanel'
 import CoursePastePanel from './import/CoursePastePanel'
+import MoodleImportPanel, {
+  type MoodleCourse,
+} from './import/MoodleImportPanel'
 
-type ImportTab = 'calendar' | 'schedule' | 'file'
+type ImportTab = 'calendar' | 'schedule' | 'file' | 'moodle'
 type ManualTab = 'event' | 'course'
 
 const IMPORT_TABS: { value: ImportTab; label: string; Icon: typeof CalendarDays }[] = [
   { value: 'calendar', label: '校历', Icon: CalendarDays },
   { value: 'schedule', label: '课程表', Icon: BookOpen },
   { value: 'file', label: '课件', Icon: FileUp },
+  { value: 'moodle', label: 'Moodle', Icon: GraduationCap },
 ]
 
 export default function ImportView() {
@@ -36,10 +40,31 @@ export default function ImportView() {
     [searchParams],
   )
 
+  const isMoodleSource = searchParams.get('source') === 'moodle'
+
   const [importTab, setImportTab] = useState<ImportTab>(
-    acData ? 'schedule' : 'calendar',
+    isMoodleSource ? 'moodle' : acData ? 'schedule' : 'calendar',
   )
   const [manualTab, setManualTab] = useState<ManualTab>('event')
+  const [moodleData, setMoodleData] = useState<MoodleCourse[] | null>(null)
+
+  // Listen for the payload posted by the Moodle extension's bridge.js. Bridge
+  // double-posts (immediate + 500ms) so registering on mount is enough.
+  useEffect(() => {
+    if (!isMoodleSource) return
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window) return
+      const data = event.data as { type?: string; payload?: unknown } | null
+      if (!data || data.type !== 'MOODLE_IMPORT_DATA') return
+      if (!Array.isArray(data.payload)) return
+      setMoodleData(data.payload as MoodleCourse[])
+      // Clear ?source=moodle so a reload doesn't leave the listener armed
+      // with nothing to receive.
+      window.history.replaceState({}, '', '/import')
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [isMoodleSource])
 
   if (!semester) {
     return (
@@ -90,6 +115,14 @@ export default function ImportView() {
           <FileImportPanel
             semester={semester}
             courses={courses}
+            onSaved={reloadEvents}
+          />
+        )}
+        {importTab === 'moodle' && (
+          <MoodleImportPanel
+            semester={semester}
+            courses={courses}
+            moodleData={moodleData}
             onSaved={reloadEvents}
           />
         )}

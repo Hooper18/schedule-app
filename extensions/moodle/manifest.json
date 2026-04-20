@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Schedule App - Moodle DDL Import",
+  "version": "1.0.0",
+  "description": "从 XMUM Moodle (l.xmu.edu.my) 一键导入 assignment / quiz 截止日期与课件文件列表到 Schedule App",
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://l.xmu.edu.my/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://calendar.tuchenguang.com/import*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
