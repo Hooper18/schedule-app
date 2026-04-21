@@ -501,6 +501,15 @@ function estimateCostRough(selectedFiles, courses) {
 }
 
 async function runLayer2Flow(courses) {
+  // Course filter step: let the user drop non-class entries (生活类选修、
+  // 入学材料页面等) before we burn time probing files. Keeping the full
+  // courses array here means downstream courseIdx stays consistent with the
+  // filtered list we pass forward.
+  const filter = await showCourseFilterOverlay(courses)
+  if (filter.action === "cancel") return
+  courses = courses.filter((_, i) => filter.selectedIndices.has(i))
+  if (courses.length === 0) return
+
   // Build flat file candidate list. Keep everything that isn't on the
   // block-list — unknown types (ext=null) still show up so the user can pick
   // them manually. Only files we're SURE are noise (zip / mp4 / xlsx etc.)
@@ -623,6 +632,149 @@ function ensureSpinKeyframes() {
 function hideOverlay() {
   const el = document.getElementById(OVERLAY_ID)
   if (el) el.remove()
+}
+
+// Course filter: lets the user drop irrelevant courses (e.g., 选修、入学
+// 材料) before the file picker. Resolves with
+// { action: 'continue' | 'cancel', selectedIndices: Set<number> }.
+function showCourseFilterOverlay(courses) {
+  return new Promise((resolve) => {
+    hideOverlay()
+    const backdrop = document.createElement("div")
+    backdrop.id = OVERLAY_ID
+    backdrop.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:99999",
+      "background:rgba(0,0,0,0.5)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "font-family:system-ui,-apple-system,'Segoe UI',sans-serif",
+    ].join(";")
+
+    const panel = document.createElement("div")
+    panel.style.cssText = [
+      "background:#fff",
+      "color:#111",
+      "border-radius:12px",
+      "max-height:80vh",
+      "width:min(520px,92vw)",
+      "display:flex",
+      "flex-direction:column",
+      "box-shadow:0 20px 60px rgba(0,0,0,0.4)",
+      "overflow:hidden",
+    ].join(";")
+
+    const header = document.createElement("div")
+    header.style.cssText =
+      "padding:14px 18px;border-bottom:1px solid #eee;font-weight:600;font-size:15px;display:flex;justify-content:space-between;align-items:center"
+    const titleSpan = document.createElement("span")
+    titleSpan.textContent = "📚 选择要导入的课程"
+    header.appendChild(titleSpan)
+    const closeBtn = document.createElement("button")
+    closeBtn.textContent = "✕"
+    closeBtn.style.cssText =
+      "border:none;background:none;font-size:20px;cursor:pointer;color:#666;padding:0 4px"
+    closeBtn.onclick = () => {
+      hideOverlay()
+      resolve({ action: "cancel", selectedIndices: new Set() })
+    }
+    header.appendChild(closeBtn)
+    panel.appendChild(header)
+
+    const hint = document.createElement("div")
+    hint.style.cssText =
+      "padding:10px 18px;background:#f8fafc;color:#475569;font-size:12px;border-bottom:1px solid #eee"
+    hint.textContent =
+      "默认全选。取消不需要导入的课程（如通识选修、非课程页面）以减少 AI 解析成本。"
+    panel.appendChild(hint)
+
+    const selected = new Set(courses.map((_, i) => i))
+
+    const body = document.createElement("div")
+    body.style.cssText = "overflow-y:auto;padding:6px 18px;flex:1"
+    courses.forEach((c, i) => {
+      const row = document.createElement("label")
+      row.style.cssText =
+        "display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0"
+      const cb = document.createElement("input")
+      cb.type = "checkbox"
+      cb.checked = true
+      cb.onchange = () => {
+        if (cb.checked) selected.add(i)
+        else selected.delete(i)
+        updateFooter()
+      }
+      row.appendChild(cb)
+      const label = document.createElement("span")
+      const code = c.course_code ? `${c.course_code} · ` : ""
+      label.textContent = `${code}${c.course_name || "(未命名)"}`
+      label.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+      row.appendChild(label)
+      const meta = document.createElement("span")
+      meta.textContent = `${c.events.length} 事件 · ${c.files.length} 文件`
+      meta.style.cssText = "color:#888;font-size:11px;flex-shrink:0"
+      row.appendChild(meta)
+      body.appendChild(row)
+    })
+    panel.appendChild(body)
+
+    const footer = document.createElement("div")
+    footer.style.cssText =
+      "padding:12px 18px;border-top:1px solid #eee;display:flex;justify-content:space-between;align-items:center;gap:10px"
+    const status = document.createElement("span")
+    status.style.cssText = "font-size:12px;color:#666"
+    footer.appendChild(status)
+    const buttonGroup = document.createElement("span")
+    buttonGroup.style.cssText = "display:flex;gap:8px"
+    const toggleBtn = document.createElement("button")
+    toggleBtn.textContent = "全选 / 反选"
+    toggleBtn.style.cssText =
+      "padding:8px 12px;border:1px solid #ddd;background:#fff;border-radius:8px;cursor:pointer;font-size:12px;color:#555"
+    toggleBtn.onclick = () => {
+      const allSelected = selected.size === courses.length
+      selected.clear()
+      if (!allSelected) courses.forEach((_, i) => selected.add(i))
+      body.querySelectorAll("input[type=checkbox]").forEach((cb, i) => {
+        cb.checked = selected.has(i)
+      })
+      updateFooter()
+    }
+    const cancelBtn = document.createElement("button")
+    cancelBtn.textContent = "取消"
+    cancelBtn.style.cssText =
+      "padding:8px 16px;border:1px solid #ddd;background:#fff;border-radius:8px;cursor:pointer;font-size:13px"
+    cancelBtn.onclick = () => {
+      hideOverlay()
+      resolve({ action: "cancel", selectedIndices: new Set() })
+    }
+    const continueBtn = document.createElement("button")
+    continueBtn.textContent = "继续 →"
+    continueBtn.style.cssText =
+      "padding:8px 16px;border:none;background:#10b981;color:#fff;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600"
+    continueBtn.onclick = () => {
+      hideOverlay()
+      resolve({ action: "continue", selectedIndices: new Set(selected) })
+    }
+    buttonGroup.appendChild(toggleBtn)
+    buttonGroup.appendChild(cancelBtn)
+    buttonGroup.appendChild(continueBtn)
+    footer.appendChild(buttonGroup)
+    panel.appendChild(footer)
+
+    const updateFooter = () => {
+      status.textContent = `已选 ${selected.size}/${courses.length} 门课程`
+      const empty = selected.size === 0
+      continueBtn.disabled = empty
+      continueBtn.style.opacity = empty ? "0.5" : "1"
+      continueBtn.style.cursor = empty ? "not-allowed" : "pointer"
+    }
+
+    backdrop.appendChild(panel)
+    document.body.appendChild(backdrop)
+    updateFooter()
+  })
 }
 
 // Picker: course-grouped file list with checkboxes. Resolves 'continue' or
@@ -991,12 +1143,22 @@ async function downloadFileAsBase64(url) {
     // to extractText pretending it's the docx/pptx the user asked for.
     if (/^text\/html/i.test(blob.type)) {
       console.warn(
-        "[schedule-app/moodle] skipping HTML wrapper response for",
+        "[schedule-app/moodle] download rejected as HTML:",
         url,
+        "content-type:",
+        blob.type,
       )
       return null
     }
     const data = await blobToBase64(blob)
+    console.log(
+      "[schedule-app/moodle] download OK:",
+      url,
+      "mime:",
+      blob.type,
+      "size:",
+      blob.size,
+    )
     return { data, mime: blob.type || "", size: blob.size }
   } catch (e) {
     console.warn("[schedule-app/moodle] download failed", url, e)
