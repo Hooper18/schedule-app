@@ -135,6 +135,24 @@ function base64ToFile(base64: string, name: string, mime: string): File {
   return new File([bytes], name, { type: mime })
 }
 
+// One-shot retry with a delay. Anthropic's rate limit (50K tokens/min) can
+// knock out a single parse even with serial dispatch when a course's files
+// are large — giving the bucket 10s to refill usually clears the 429.
+async function withRetry<T>(fn: () => Promise<T>, delayMs: number): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    console.warn(
+      '[MoodleImportPanel] parse failed, retrying in',
+      delayMs,
+      'ms',
+      e,
+    )
+    await new Promise((r) => setTimeout(r, delayMs))
+    return await fn()
+  }
+}
+
 function typeBadgeClass(type: EventType): string {
   switch (type) {
     case 'deadline':
@@ -226,9 +244,16 @@ export default function MoodleImportPanel({
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   // Per-course AI parse state keyed by course index.
   const [aiState, setAIState] = useState<Record<number, AICourseState>>({})
-  // Prevents double-triggering AI parse for the same course when React 18's
-  // StrictMode double-fires useEffect in dev.
-  const aiStartedRef = useRef<Set<number>>(new Set())
+  // Overall queue progress (serial runner). null when idle.
+  const [queueProgress, setQueueProgress] = useState<{
+    current: number
+    total: number
+    label: string
+  } | null>(null)
+  // Keyed by the sequence of eligible course indices for the current payload.
+  // Prevents StrictMode's double-mount (and effect-deps changes) from kicking
+  // off the queue twice.
+  const queueStartedRef = useRef<string | null>(null)
 
   const runAIParse = useCallback(
     async (ci: number, mc: MoodleCourse) => {
@@ -340,26 +365,36 @@ export default function MoodleImportPanel({
           return
         }
 
-        // Single API call per course. Claude-proxy's file_import takes at
-        // most one image — if the page has multiple images we pass only
-        // the first (rest gets text-only treatment).
+        // Single API call per course (with one 10s-delayed retry on any
+        // error — usually a 429 from the 50K tokens/min bucket). Claude-
+        // proxy's file_import takes at most one image — if the page has
+        // multiple images we pass only the first (rest gets text-only
+        // treatment).
         let events
         if (hasImage) {
-          events = await parseImage(
-            images[0].data,
-            images[0].mime,
-            trimmed,
-            courses,
-            calendar,
-            semester,
+          events = await withRetry(
+            () =>
+              parseImage(
+                images[0].data,
+                images[0].mime,
+                trimmed,
+                courses,
+                calendar,
+                semester,
+              ),
+            10_000,
           )
         } else {
-          events = await parseFileText(
-            trimmed,
-            (primaryKind ?? 'pdf') as FileKind,
-            courses,
-            calendar,
-            semester,
+          events = await withRetry(
+            () =>
+              parseFileText(
+                trimmed,
+                (primaryKind ?? 'pdf') as FileKind,
+                courses,
+                calendar,
+                semester,
+              ),
+            10_000,
           )
         }
 
@@ -422,26 +457,53 @@ export default function MoodleImportPanel({
     setOverrideCodes({})
     setEditingIdx(null)
     setAIState({})
-    aiStartedRef.current = new Set()
+    setQueueProgress(null)
+    queueStartedRef.current = null
   }, [moodleData])
 
-  // Kick off AI parse for courses carrying Layer 2 data. Runs once per course
-  // per moodleData arrival — the ref guards against StrictMode double-fire.
-  // Skip when there are no registered courses: the component shows a
-  // "请先导入课程表" screen and we'd otherwise burn Claude quota on events
-  // that all land as course_id=null.
+  // Serial queue runner. Anthropic's 50K tokens/min bucket gets blown
+  // immediately if we fire all courses in parallel, so we process them one
+  // at a time with a 3s cooldown between courses. Per-course retry on error
+  // is handled inside runAIParse via withRetry.
+  const runAIQueue = useCallback(
+    async (eligible: Array<{ ci: number; mc: MoodleCourse }>) => {
+      for (let i = 0; i < eligible.length; i++) {
+        const { ci, mc } = eligible[i]
+        setQueueProgress({
+          current: i + 1,
+          total: eligible.length,
+          label: mc.course_code ?? mc.course_name ?? '未命名',
+        })
+        await runAIParse(ci, mc)
+        if (i < eligible.length - 1) {
+          await new Promise((r) => setTimeout(r, 3000))
+        }
+      }
+      setQueueProgress(null)
+    },
+    [runAIParse],
+  )
+
+  // Kick off the queue for courses carrying Layer 2 data. Runs once per
+  // moodleData arrival — queueStartedRef's string key guards against
+  // StrictMode double-fire and effect-deps churn. Skip when there are no
+  // registered courses: the component shows a "请先导入课程表" screen and
+  // we'd otherwise burn Claude quota on events that all land as
+  // course_id=null.
   useEffect(() => {
     if (!moodleData || courses.length === 0) return
-    moodleData.forEach((mc, ci) => {
-      if (aiStartedRef.current.has(ci)) return
+    const eligible = moodleData.flatMap((mc, ci) => {
       const hasFiles = (mc.downloaded_files?.length ?? 0) > 0
       const hasPage = (mc.page_content?.text?.trim().length ?? 0) > 0
       const hasImage = (mc.page_content?.images?.length ?? 0) > 0
-      if (!hasFiles && !hasPage && !hasImage) return
-      aiStartedRef.current.add(ci)
-      void runAIParse(ci, mc)
+      return hasFiles || hasPage || hasImage ? [{ ci, mc }] : []
     })
-  }, [moodleData, runAIParse, courses.length])
+    if (eligible.length === 0) return
+    const key = eligible.map((e) => e.ci).join(',')
+    if (queueStartedRef.current === key) return
+    queueStartedRef.current = key
+    void runAIQueue(eligible)
+  }, [moodleData, courses.length, runAIQueue])
 
   const coursesByCode = useMemo(() => {
     const map = new Map<string, Course>()
@@ -784,6 +846,15 @@ export default function MoodleImportPanel({
           充值
         </button>
       </div>
+
+      {queueProgress && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-600 text-xs">
+          <Loader2 size={14} className="animate-spin shrink-0" />
+          <span className="truncate">
+            正在解析 {queueProgress.current}/{queueProgress.total}: {queueProgress.label}…
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <div className="text-xs text-dim">
