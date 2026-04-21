@@ -153,6 +153,63 @@ async function withRetry<T>(fn: () => Promise<T>, delayMs: number): Promise<T> {
   }
 }
 
+// Collapses obvious spelling/casing variants so the dedup keys line up.
+// Deliberately narrow — "Quiz 1" and "Quiz 2" must stay distinct, and
+// "Quizzes (×3)" must not collapse into "Quiz 1".
+function normalizeTitle(raw: string): string {
+  let t = (raw || '').toLowerCase().trim()
+  t = t.replace(/final examination\b/g, 'final exam')
+  t = t.replace(/mid-term\b/g, 'midterm')
+  t = t.replace(/^the\s+/, '').replace(/\s+the$/, '')
+  t = t.replace(/\s+/g, ' ')
+  return t
+}
+
+// Per-event score used to pick the representative when duplicates are found.
+// Priority: has date > has weight > Layer 2 (AI, usually richer notes/type).
+function dedupScore(e: MoodleEvent): number {
+  let s = 0
+  if (e.date) s += 100
+  if (e.weight) s += 10
+  if (e.is_layer2) s += 1
+  return s
+}
+
+// Within a single course, merges events whose normalized titles collide.
+// Keeps the highest-scoring variant and appends any non-overlapping notes
+// from the discarded siblings. The ordering of the output matches the
+// first-seen position of each unique normalized title so stable ci:ei
+// selection keys don't drift wildly when Layer 2 results arrive.
+function deduplicateEvents(events: MoodleEvent[]): MoodleEvent[] {
+  const groups = new Map<string, MoodleEvent[]>()
+  const order: string[] = []
+  for (const e of events) {
+    const key = normalizeTitle(e.title)
+    const existing = groups.get(key)
+    if (existing) {
+      existing.push(e)
+    } else {
+      groups.set(key, [e])
+      order.push(key)
+    }
+  }
+  return order.map((key) => {
+    const group = groups.get(key)!
+    if (group.length === 1) return group[0]
+    const sorted = [...group].sort((a, b) => dedupScore(b) - dedupScore(a))
+    const best = sorted[0]
+    const extraNotes: string[] = []
+    for (const e of sorted.slice(1)) {
+      if (e.notes && !(best.notes ?? '').includes(e.notes)) {
+        extraNotes.push(e.notes)
+      }
+    }
+    const mergedNotes =
+      [best.notes, ...extraNotes].filter(Boolean).join(' · ') || null
+    return { ...best, notes: mergedNotes }
+  })
+}
+
 function typeBadgeClass(type: EventType): string {
   switch (type) {
     case 'deadline':
@@ -540,7 +597,9 @@ export default function MoodleImportPanel({
     setEditingIdx(null)
   }
 
-  // enrichedCourses = original Layer 1 events + Layer 2 events from AI parse.
+  // enrichedCourses = original Layer 1 events + Layer 2 events from AI parse,
+  // with per-course dedup so the same real assessment doesn't show up twice
+  // (DOM-scraped Layer 1 stub + AI-derived Layer 2 row with full details).
   // Rendering, selection keys, totals, and doImport all iterate over these.
   const enrichedCourses = useMemo(() => {
     if (!moodleData) return null
@@ -551,7 +610,7 @@ export default function MoodleImportPanel({
       }))
       const s = aiState[ci]
       const layer2 = s?.status === 'success' ? s.newEvents : []
-      return { ...mc, events: [...layer1, ...layer2] }
+      return { ...mc, events: deduplicateEvents([...layer1, ...layer2]) }
     })
   }, [moodleData, aiState])
 
