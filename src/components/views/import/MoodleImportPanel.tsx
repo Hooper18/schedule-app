@@ -23,12 +23,13 @@ import { useClaude } from '../../../hooks/useClaude'
 import { useCalendar } from '../../../hooks/useCalendar'
 import { useBalance } from '../../../hooks/useBalance'
 import {
-  deductBalance,
-  estimateCourseParseCostUsd,
+  // TODO: 重新启用扣费
+  // deductBalance,
+  // estimateCourseParseCostUsd,
+  // refundBalance,
+  // usdToCny,
   formatCNY,
   LOW_BALANCE_THRESHOLD_CNY,
-  refundBalance,
-  usdToCny,
 } from '../../../lib/balance'
 import type { FileKind } from '../../../lib/fileParsers'
 
@@ -208,7 +209,8 @@ export default function MoodleImportPanel({
   const { user } = useAuth()
   const { parseFileText, parseImage } = useClaude()
   const { entries: calendar } = useCalendar(semester.id)
-  const { balance, reload: reloadBalance } = useBalance()
+  // TODO: 重新启用扣费 — 用回 reload: reloadBalance
+  const { balance } = useBalance()
   const [topupOpen, setTopupOpen] = useState(false)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [filesOpen, setFilesOpen] = useState<Record<number, boolean>>({})
@@ -230,38 +232,35 @@ export default function MoodleImportPanel({
 
   const runAIParse = useCallback(
     async (ci: number, mc: MoodleCourse) => {
-      // Pre-deduct based on a rough upper-bound estimate. Billing happens
-      // here (not at import-save time) because the cost is incurred by the
-      // Claude API call, regardless of whether the user later keeps the
-      // events. Refunded in the catch block if the call fails.
-      const bytes = (mc.downloaded_files ?? []).reduce(
-        (s, f) => s + (f.size ?? 0),
-        0,
-      )
-      const chars = mc.page_content?.text?.length ?? 0
-      const costUsd = estimateCourseParseCostUsd(bytes, chars)
-      const costCny = Number(usdToCny(costUsd).toFixed(2))
-      const description = `Moodle 课件 AI 解析：${mc.course_code ?? mc.course_name ?? '未命名'}`
-
-      const deduct = await deductBalance(costCny, description)
-      if (!deduct.ok) {
-        const isInsufficient = deduct.message?.includes('insufficient balance')
-        setAIState((prev) => ({
-          ...prev,
-          [ci]: {
-            status: isInsufficient ? 'insufficient_balance' : 'error',
-            newEvents: [],
-            source: 'moodle_scan',
-            sourceFile: 'moodle_scan',
-            error: isInsufficient
-              ? `需要 ${formatCNY(costCny)}，余额不足`
-              : deduct.message || '扣费失败',
-          },
-        }))
-        reloadBalance()
-        return
-      }
-      reloadBalance()
+      // TODO: 重新启用扣费
+      // const bytes = (mc.downloaded_files ?? []).reduce(
+      //   (s, f) => s + (f.size ?? 0),
+      //   0,
+      // )
+      // const chars = mc.page_content?.text?.length ?? 0
+      // const costUsd = estimateCourseParseCostUsd(bytes, chars)
+      // const costCny = Number(usdToCny(costUsd).toFixed(2))
+      // const description = `Moodle 课件 AI 解析：${mc.course_code ?? mc.course_name ?? '未命名'}`
+      //
+      // const deduct = await deductBalance(costCny, description)
+      // if (!deduct.ok) {
+      //   const isInsufficient = deduct.message?.includes('insufficient balance')
+      //   setAIState((prev) => ({
+      //     ...prev,
+      //     [ci]: {
+      //       status: isInsufficient ? 'insufficient_balance' : 'error',
+      //       newEvents: [],
+      //       source: 'moodle_scan',
+      //       sourceFile: 'moodle_scan',
+      //       error: isInsufficient
+      //         ? `需要 ${formatCNY(costCny)}，余额不足`
+      //         : deduct.message || '扣费失败',
+      //     },
+      //   }))
+      //   reloadBalance()
+      //   return
+      // }
+      // reloadBalance()
 
       setAIState((prev) => ({
         ...prev,
@@ -270,7 +269,6 @@ export default function MoodleImportPanel({
           newEvents: [],
           source: 'moodle_scan',
           sourceFile: 'moodle_scan',
-          deductedCny: costCny,
         },
       }))
       try {
@@ -327,9 +325,9 @@ export default function MoodleImportPanel({
 
         const trimmed = combinedText.trim()
         if (!trimmed && !hasImage) {
-          // Nothing to send to Claude — refund the pre-deduct and bail.
-          await refundBalance(costCny, `${description}（无内容，退款）`)
-          reloadBalance()
+          // TODO: 重新启用扣费
+          // await refundBalance(costCny, `${description}（无内容，退款）`)
+          // reloadBalance()
           setAIState((prev) => ({
             ...prev,
             [ci]: {
@@ -385,15 +383,13 @@ export default function MoodleImportPanel({
             newEvents,
             source,
             sourceFile,
-            deductedCny: costCny,
           },
         }))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        // AI call failed after we already deducted — refund so the user
-        // isn't charged for a call that produced nothing.
-        await refundBalance(costCny, `${description}（失败退款）`)
-        reloadBalance()
+        // TODO: 重新启用扣费
+        // await refundBalance(costCny, `${description}（失败退款）`)
+        // reloadBalance()
         setAIState((prev) => ({
           ...prev,
           [ci]: {
@@ -406,7 +402,7 @@ export default function MoodleImportPanel({
         }))
       }
     },
-    [calendar, courses, parseFileText, parseImage, semester, reloadBalance],
+    [calendar, courses, parseFileText, parseImage, semester],
   )
 
   // Auto-select all events when a new payload arrives; also drop any overrides
