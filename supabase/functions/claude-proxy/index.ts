@@ -449,6 +449,12 @@ Extraction guidelines:
   Judgement standard: if an item has concrete sub-assessments listed under it, it is a category → skip. Only emit leaf-level assessment items.
   If an item has NO sub-items (just a single name + weight, no further breakdown), it IS the leaf assessment — emit it directly.
   Emitting both a category and its sub-items double-counts weight and pushes the course total above 100%.
+- PERCENTAGE EXTRACTION RULES (CRITICAL):
+    * When a document shows a hierarchical assessment structure (e.g., "Coursework 20%" containing "Quizzes + Assignment"), extract the INDIVIDUAL item percentages, NOT the category total.
+    * If only a category total is given (e.g., "Coursework 20%" with sub-items "Quizzes" and "Assignment" but no individual percentages), and one sub-item's percentage is known from another source (e.g., Assignment = 5% from a separate document), calculate the remainder (e.g., Quizzes = 20% − 5% = 15%).
+    * If you cannot determine an individual item's exact percentage, set weight to null rather than guessing or using the category total.
+    * Common structure: "Coursework X%" is a CATEGORY containing multiple items. "Examination Y%" is another CATEGORY. The numbers next to "Midterm exam" and "Final exam" under Examination are their INDIVIDUAL percentages, not subdivisions of something else.
+    * NEVER shift or redistribute percentages. If the document says "Midterm exam 30%", the weight is 30, period. Do not reassign 30% to a different item because the order of emission differs from the document.
 - Split every distinctly-named leaf assessment into its own event by DEFAULT. "Quiz 1" with Week 3, "Quiz 2" with Week 7 → two separate events. Never merge leaf assessments that have dates into another event's notes field.
 - MERGE RULE for CLASS C sub-items (apply ONLY when ALL three conditions hold): inside the SAME grading category, multiple leaf items of the SAME TYPE (e.g. 3 Quizzes, 4 Lab Reports), every single one of which has NO date information at all (all CLASS C) → collapse them into ONE merged event.
     * title: plural form + count, e.g. "Quizzes (×3)", "Lab Reports (×4)".
