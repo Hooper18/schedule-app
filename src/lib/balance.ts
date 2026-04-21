@@ -56,7 +56,7 @@ export async function deductBalance(
     if (ctx && typeof ctx.json === 'function') {
       try {
         const body = (await ctx.json()) as DeductResult
-        return { ok: false, ...body }
+        return { ...body, ok: false }
       } catch {
         /* fall through */
       }
