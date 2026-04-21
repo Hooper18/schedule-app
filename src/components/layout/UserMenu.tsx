@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { User, Settings, LogOut } from 'lucide-react'
+import { User, Settings, LogOut, Wallet } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
+import { useBalance } from '../../hooks/useBalance'
+import { formatCNY, LOW_BALANCE_THRESHOLD_CNY } from '../../lib/balance'
+import TopupModal from '../TopupModal'
 
 export default function UserMenu() {
   const { user, signOut } = useAuth()
+  const { balance } = useBalance()
   const [open, setOpen] = useState(false)
+  const [topupOpen, setTopupOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,6 +28,8 @@ export default function UserMenu() {
     }
   }, [open])
 
+  const low = balance !== null && balance < LOW_BALANCE_THRESHOLD_CNY
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -40,7 +47,7 @@ export default function UserMenu() {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1 w-56 rounded-xl bg-main border border-border shadow-lg overflow-hidden z-30"
+          className="absolute right-0 top-full mt-1 w-60 rounded-xl bg-main border border-border shadow-lg overflow-hidden z-30"
         >
           <div className="px-3 py-2 border-b border-border">
             <div className="text-[10px] uppercase tracking-wider text-muted">
@@ -50,6 +57,23 @@ export default function UserMenu() {
               {user?.email ?? '—'}
             </div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
+              setTopupOpen(true)
+            }}
+            className="w-full px-3 py-2.5 flex items-center gap-2 text-sm text-text hover:bg-hover transition-colors"
+          >
+            <Wallet size={14} className={low ? 'text-red-500' : 'text-dim'} />
+            <span>余额</span>
+            <span
+              className={`ml-auto text-xs ${low ? 'text-red-500 font-medium' : 'text-dim'}`}
+            >
+              {balance === null ? '…' : formatCNY(balance)}
+            </span>
+          </button>
 
           <button
             type="button"
@@ -77,6 +101,8 @@ export default function UserMenu() {
           </button>
         </div>
       )}
+
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { useSemesterBootstrap } from './hooks/useSemesterBootstrap'
 import AuthPage from './pages/Auth'
 import ResetPassword from './pages/ResetPassword'
+import InviteRedemptionBanner from './components/InviteRedemptionBanner'
 import Timeline from './pages/Timeline'
 import CalendarPage from './pages/Calendar'
 import Courses from './pages/Courses'
@@ -37,19 +38,22 @@ function AppRoutes() {
   const { user, loading, isRecoverySession } = useAuth()
   if (loading) return <Loading />
   return (
-    <Routes>
-      <Route
-        path="/auth"
-        element={user && !isRecoverySession ? <Navigate to="/" replace /> : <AuthPage />}
-      />
-      <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/" element={<Protected><Timeline /></Protected>} />
-      <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
-      <Route path="/courses" element={<Protected><Courses /></Protected>} />
-      <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
-      <Route path="/import" element={<Protected><Import /></Protected>} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      {user && <InviteRedemptionBanner />}
+      <Routes>
+        <Route
+          path="/auth"
+          element={user && !isRecoverySession ? <Navigate to="/" replace /> : <AuthPage />}
+        />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/" element={<Protected><Timeline /></Protected>} />
+        <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
+        <Route path="/courses" element={<Protected><Courses /></Protected>} />
+        <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
+        <Route path="/import" element={<Protected><Import /></Protected>} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   )
 }
 
