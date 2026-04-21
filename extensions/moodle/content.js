@@ -419,15 +419,43 @@ function autoSelectByKeyword(name) {
   return AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
 }
 
-// Extract file extension from either anchor text or URL. Returns lowercase
-// ext without the dot, or null when nothing matches our allow-list.
+// Explicitly-unsupported extensions. Anything else (including entirely
+// unknown types) is kept — the user can still manually opt in via the picker.
+const BLOCKED_EXTS = new Set([
+  "zip", "mp4", "mp3", "avi", "mov",
+  "xlsx", "xls", "csv", "txt",
+  "py", "m", "c",
+])
+
+// Best-effort file-extension detection with three fallback steps:
+//   a) pluginfile.php URL path tail — Moodle's direct file URLs end with the
+//      real filename (e.g. /pluginfile.php/123/.../slides.pptx?forcedownload=1)
+//   b) anchor text (the link label may itself be the filename)
+//   c) neither — return null; the picker shows this as "未知类型" and leaves
+//      it user-togglable rather than hiding it.
+// /mod/resource/view.php?id=X intentionally lacks any filename hint and falls
+// through to case (b) / (c).
 function detectExt(name, url) {
-  const pat = /\.(pptx|ppt|pdf|docx|doc|png|jpg|jpeg)(?=$|\?|#)/i
-  const n = (name || "").match(pat)
-  if (n) return n[1].toLowerCase()
-  const u = (url || "").match(pat)
-  if (u) return u[1].toLowerCase()
-  return null
+  return extFromPluginfileUrl(url) || extFromName(name) || null
+}
+
+function extFromPluginfileUrl(url) {
+  if (!url || !/\/pluginfile\.php\//i.test(url)) return null
+  const pathOnly = url.split("?")[0].split("#")[0]
+  const lastSegment = pathOnly.split("/").pop() || ""
+  let decoded = lastSegment
+  try {
+    decoded = decodeURIComponent(lastSegment)
+  } catch {
+    // keep raw
+  }
+  return extFromName(decoded)
+}
+
+function extFromName(name) {
+  if (!name) return null
+  const m = name.toLowerCase().match(/\.([a-z0-9]+)(?=$|\?|#)/)
+  return m ? m[1] : null
 }
 
 function formatBytes(bytes) {
@@ -463,19 +491,24 @@ function estimateCostRough(selectedFiles, courses) {
 }
 
 async function runLayer2Flow(courses) {
-  // Build flat file candidate list filtered to known extensions.
+  // Build flat file candidate list. Keep everything that isn't on the
+  // block-list — unknown types (ext=null) still show up so the user can pick
+  // them manually. Only files we're SURE are noise (zip / mp4 / xlsx etc.)
+  // get dropped silently.
   const allFiles = []
   courses.forEach((c, ci) => {
     for (const f of c.files) {
       const ext = detectExt(f.name, f.url)
-      if (!ext) continue
+      if (ext && BLOCKED_EXTS.has(ext)) continue
       allFiles.push({
         courseIdx: ci,
         name: f.name,
         url: f.url,
-        ext,
+        ext, // may be null for "未知类型"
         sizeBytes: null,
-        selected: autoSelectByKeyword(f.name),
+        // Keyword auto-select only applies when we know the ext — unknown
+        // types default to unchecked (user must opt in).
+        selected: ext !== null && autoSelectByKeyword(f.name),
       })
     }
   })
@@ -526,8 +559,17 @@ async function probeSizes(allFiles) {
           redirect: "follow",
         })
         if (resp.ok) {
-          const len = resp.headers.get("content-length")
-          if (len) f.sizeBytes = parseInt(len, 10)
+          // Some Moodle themes return HTML for HEAD on /mod/resource/view.php
+          // instead of redirecting to the file. In that case content-length
+          // describes the HTML wrapper, not the actual file — useless and
+          // misleading. Only trust content-length when the content-type
+          // clearly isn't HTML (i.e. this really is the binary file).
+          const ctype = (resp.headers.get("content-type") || "").toLowerCase()
+          const looksLikeHtml = ctype.includes("text/html")
+          if (!looksLikeHtml) {
+            const len = resp.headers.get("content-length")
+            if (len) f.sizeBytes = parseInt(len, 10)
+          }
         }
       } catch {
         // leave sizeBytes null
@@ -722,6 +764,7 @@ function showPickerOverlay(courses, allFiles) {
 
 function makeFileRow(f, onToggle) {
   const tooLarge = f.sizeBytes !== null && f.sizeBytes > MAX_FILE_BYTES
+  const unknownType = f.ext === null
 
   const row = document.createElement("label")
   row.style.cssText =
@@ -751,19 +794,20 @@ function makeFileRow(f, onToggle) {
   ].join(";")
   row.appendChild(name)
 
-  const size = document.createElement("span")
+  const meta = document.createElement("span")
+  meta.style.cssText = "font-size:11px;white-space:nowrap;flex-shrink:0"
   if (tooLarge) {
-    size.textContent = `${formatBytes(f.sizeBytes)} (超过 10MB，跳过)`
-    size.style.color = "#aaa"
-  } else if (f.sizeBytes !== null) {
-    size.textContent = formatBytes(f.sizeBytes)
-    size.style.color = "#666"
+    meta.textContent = `${formatBytes(f.sizeBytes)} (超过 10MB，跳过)`
+    meta.style.color = "#aaa"
   } else {
-    size.textContent = "大小未知"
-    size.style.color = "#aaa"
+    const parts = []
+    if (unknownType) parts.push("未知类型")
+    if (f.sizeBytes !== null) parts.push(formatBytes(f.sizeBytes))
+    else parts.push("大小未知")
+    meta.textContent = parts.join(" · ")
+    meta.style.color = unknownType ? "#a78bfa" : "#666"
   }
-  size.style.cssText += ";font-size:11px;white-space:nowrap;flex-shrink:0"
-  row.appendChild(size)
+  row.appendChild(meta)
 
   return row
 }
@@ -854,11 +898,17 @@ async function downloadAll(courses, allFiles) {
       )
       const res = await downloadFileAsBase64(f.url)
       if (res) {
+        const finalMime = res.mime || mimeFromExt(f.ext)
+        // Resolve the extension now that we know the real mime. For
+        // "未知类型" files (f.ext=null) this is often the first chance we
+        // have to correctly classify the payload.
+        const resolvedExt = f.ext || extFromMime(finalMime)
+        const finalName = ensureNameHasExt(f.name, resolvedExt)
         const list = filesByCourse.get(f.courseIdx) || []
         list.push({
-          name: f.name,
+          name: finalName,
           data: res.data,
-          mime: res.mime || mimeFromExt(f.ext),
+          mime: finalMime,
           size: res.size,
         })
         filesByCourse.set(f.courseIdx, list)
@@ -894,6 +944,16 @@ async function downloadFileAsBase64(url) {
     if (!resp.ok) return null
     const blob = await resp.blob()
     if (blob.size > MAX_FILE_BYTES) return null
+    // Moodle occasionally serves an HTML wrapper page for /mod/resource/view.php
+    // instead of redirecting to the file. We'd rather skip than feed that HTML
+    // to extractText pretending it's the docx/pptx the user asked for.
+    if (/^text\/html/i.test(blob.type)) {
+      console.warn(
+        "[schedule-app/moodle] skipping HTML wrapper response for",
+        url,
+      )
+      return null
+    }
     const data = await blobToBase64(blob)
     return { data, mime: blob.type || "", size: blob.size }
   } catch (e) {
@@ -938,6 +998,29 @@ function mimeFromExt(ext) {
     default:
       return "application/octet-stream"
   }
+}
+
+// Reverse of mimeFromExt. Used after download on "未知类型" files: the blob's
+// mime tells us the real format, so we can label the filename with the right
+// extension and let the frontend's classifyFile() route it to pdfjs / mammoth
+// / jszip as appropriate.
+function extFromMime(mime) {
+  if (!mime) return null
+  const m = mime.toLowerCase()
+  if (m.includes("presentationml.presentation")) return "pptx"
+  if (m.includes("ms-powerpoint")) return "ppt"
+  if (m.includes("wordprocessingml.document")) return "docx"
+  if (m.includes("msword")) return "doc"
+  if (m.includes("pdf")) return "pdf"
+  if (m.includes("image/png")) return "png"
+  if (m.includes("image/jpeg") || m.includes("image/jpg")) return "jpg"
+  return null
+}
+
+function ensureNameHasExt(name, ext) {
+  if (!ext) return name
+  if (extFromName(name)) return name
+  return `${name}.${ext}`
 }
 
 function showReadyOverlay(courses, downloads) {
