@@ -412,11 +412,15 @@ const AUTO_SELECT_KEYWORDS = [
   "rubric", "grading", "marking", "weightage",
   "course info", "course_info", "courseinformation",
   "group assignment", "individual assignment",
+  "introduction", "course plan", "courseplan",
+  "cover page", "coverpage", "module", "chapter",
 ]
 
 function autoSelectByKeyword(name) {
   const lower = (name || "").toLowerCase()
-  return AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
+  const result = AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
+  console.log("[schedule-app/moodle] autoSelect check:", name, "→", result)
+  return result
 }
 
 // Explicitly-unsupported extensions. Anything else (including entirely
