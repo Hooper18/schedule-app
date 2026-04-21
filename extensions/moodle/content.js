@@ -416,10 +416,28 @@ const AUTO_SELECT_KEYWORDS = [
   "cover page", "coverpage", "chapter",
 ]
 
+// Keywords that veto the auto-select. Mostly answer-key / mark-scheme noise
+// where the file's name would otherwise trip on "quiz" / "assignment" but
+// carries no real deadline info — users were manually unchecking these
+// every time.
+const AUTO_DESELECT_KEYWORDS = [
+  "solution", "solutions", "answer", "answers",
+  "marking", "rubric", "scheme", "model answer", "suggested answer",
+  "memo",
+]
+
 function autoSelectByKeyword(name) {
   const lower = (name || "").toLowerCase()
-  const result = AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
-  console.log("[schedule-app/moodle] autoSelect check:", name, "→", result)
+  const shouldSelect = AUTO_SELECT_KEYWORDS.some((kw) => lower.includes(kw))
+  const shouldExclude = AUTO_DESELECT_KEYWORDS.some((kw) => lower.includes(kw))
+  const result = shouldSelect && !shouldExclude
+  console.log(
+    "[schedule-app/moodle] autoSelect check:",
+    name,
+    "→",
+    result,
+    shouldExclude ? "(excluded)" : "",
+  )
   return result
 }
 
