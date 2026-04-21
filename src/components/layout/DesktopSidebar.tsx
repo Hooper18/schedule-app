@@ -1,5 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { Clock, Calendar, BookOpen, Plus, Settings } from 'lucide-react'
+import {
+  Clock,
+  Calendar,
+  BookOpen,
+  Plus,
+  Settings,
+  CalendarRange,
+} from 'lucide-react'
 
 // Desktop-only left rail. Mirrors BottomNav's route list so either surface
 // navigates the same way. Settings is rendered disabled for now — no route
@@ -13,6 +20,7 @@ const items: Array<{
   { to: '/', label: 'Timeline', Icon: Clock, end: true },
   { to: '/calendar', label: 'Calendar', Icon: Calendar },
   { to: '/courses', label: 'Courses', Icon: BookOpen },
+  { to: '/academic', label: '校历', Icon: CalendarRange },
   { to: '/import', label: 'Add', Icon: Plus },
 ]
 

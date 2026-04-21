@@ -10,6 +10,7 @@ import CalendarPage from './pages/Calendar'
 import Courses from './pages/Courses'
 import CourseDetail from './pages/CourseDetail'
 import Import from './pages/Import'
+import AcademicCalendar from './pages/AcademicCalendar'
 
 function Loading({ message }: { message?: string }) {
   return (
@@ -51,6 +52,7 @@ function AppRoutes() {
         <Route path="/courses" element={<Protected><Courses /></Protected>} />
         <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
         <Route path="/import" element={<Protected><Import /></Protected>} />
+        <Route path="/academic" element={<Protected><AcademicCalendar /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
