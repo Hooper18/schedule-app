@@ -466,12 +466,18 @@ function formatBytes(bytes) {
 }
 
 // Rough cost estimate — shown in both picker (pre-download) and ready
-// overlay (post-download). Constants match the task spec.
+// overlay (post-download). Constants match the task spec. Unknown-size
+// files (Moodle view.php links we deliberately didn't probe) are stubbed
+// at 500 KB each so the estimate stays in the right order of magnitude
+// instead of treating them as free.
+const UNKNOWN_SIZE_ASSUMED_KB = 500
+
 function estimateCostRough(selectedFiles, courses) {
-  const fileSizeMB = selectedFiles.reduce(
-    (s, f) => s + (f.sizeBytes || f.size || 0) / 1024 / 1024,
-    0,
-  )
+  const fileSizeMB = selectedFiles.reduce((s, f) => {
+    const bytes = f.sizeBytes ?? f.size ?? null
+    if (bytes == null) return s + UNKNOWN_SIZE_ASSUMED_KB / 1024
+    return s + bytes / 1024 / 1024
+  }, 0)
   const fileInputTokens = fileSizeMB * 60000
   const pageTextChars = courses.reduce(
     (s, c) => s + (c.pageText ? c.pageText.length : 0),
@@ -506,9 +512,14 @@ async function runLayer2Flow(courses) {
         url: f.url,
         ext, // may be null for "未知类型"
         sizeBytes: null,
-        // Keyword auto-select only applies when we know the ext — unknown
-        // types default to unchecked (user must opt in).
-        selected: ext !== null && autoSelectByKeyword(f.name),
+        // sizeDeferred=true means we chose not to probe (Moodle view.php
+        // URLs don't return the real file size via HEAD). Different from
+        // "probe tried and failed" — flipped in probeSizes().
+        sizeDeferred: false,
+        // Keyword auto-select is filename-only. Almost every Moodle resource
+        // link is the ext-less view.php pattern, so gating on ext would mean
+        // effectively no auto-select ever fires.
+        selected: autoSelectByKeyword(f.name),
       })
     }
   })
@@ -552,6 +563,17 @@ async function probeSizes(allFiles) {
     while (queue.length > 0) {
       const f = queue.shift()
       if (!f) break
+      // /mod/resource/view.php never gives a usable size via HEAD — Moodle
+      // either redirects to /pluginfile.php (and the HEAD on the redirect
+      // target varies per theme) or serves an HTML wrapper whose
+      // content-length describes the page, not the file. Skip up front; we
+      // find out the size when we actually download the blob.
+      if (/\/mod\/resource\/view\.php/i.test(f.url)) {
+        f.sizeDeferred = true
+        done++
+        update()
+        continue
+      }
       try {
         const resp = await fetch(f.url, {
           method: "HEAD",
@@ -659,7 +681,18 @@ function showPickerOverlay(courses, allFiles) {
           f.selected &&
           (f.sizeBytes === null || f.sizeBytes <= MAX_FILE_BYTES),
       )
-      const totalBytes = sel.reduce((s, f) => s + (f.sizeBytes || 0), 0)
+      const knownBytes = sel.reduce((s, f) => s + (f.sizeBytes || 0), 0)
+      const unknownCount = sel.filter((f) => f.sizeBytes === null).length
+      let sizeLabel
+      if (sel.length === 0) {
+        sizeLabel = "0 B"
+      } else if (unknownCount === sel.length) {
+        sizeLabel = "大小待下载后确定"
+      } else if (unknownCount > 0) {
+        sizeLabel = `${formatBytes(knownBytes)} + ${unknownCount} 个待确定`
+      } else {
+        sizeLabel = formatBytes(knownBytes)
+      }
       const coursesWithText = courses.filter(
         (c) => c.pageText && c.pageText.length > 0,
       ).length
@@ -667,7 +700,7 @@ function showPickerOverlay(courses, allFiles) {
         (s, c) => s + (c.inlineImages ? c.inlineImages.length : 0),
         0,
       )
-      footerA.textContent = `已选 ${sel.length} 个文件 (${formatBytes(totalBytes)}) + ${coursesWithText} 门课页面文本 + ${images} 张内嵌图片`
+      footerA.textContent = `已选 ${sel.length} 个文件 (${sizeLabel}) + ${coursesWithText} 门课页面文本 + ${images} 张内嵌图片`
       const cost = estimateCostRough(sel, courses)
       footerB.textContent = `预估 API 费用: ~$${cost.toFixed(2)}`
     }
@@ -802,8 +835,13 @@ function makeFileRow(f, onToggle) {
   } else {
     const parts = []
     if (unknownType) parts.push("未知类型")
-    if (f.sizeBytes !== null) parts.push(formatBytes(f.sizeBytes))
-    else parts.push("大小未知")
+    if (f.sizeBytes !== null) {
+      parts.push(formatBytes(f.sizeBytes))
+    } else if (f.sizeDeferred) {
+      parts.push("大小待下载后确定")
+    } else {
+      parts.push("大小未知")
+    }
     meta.textContent = parts.join(" · ")
     meta.style.color = unknownType ? "#a78bfa" : "#666"
   }
