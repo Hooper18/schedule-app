@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import Header from './Header'
 import BottomNav from './BottomNav'
+import DesktopSidebar from './DesktopSidebar'
 
 interface Props {
   title: string
@@ -30,9 +31,14 @@ export default function Layout({
   const rootCls = fixedHeight
     ? 'h-dvh overflow-hidden flex flex-col bg-main text-text'
     : 'min-h-screen flex flex-col bg-main text-text'
+  // Inner wrapper hosts the md:sidebar + main row. Keeps the Header above
+  // and BottomNav (mobile only) below.
+  const innerCls = fixedHeight
+    ? 'flex-1 min-h-0 flex'
+    : 'flex-1 flex'
   const mainCls = fixedHeight
-    ? 'flex-1 min-h-0 overflow-hidden'
-    : `flex-1 ${hideNav ? '' : 'pb-20'}`
+    ? 'flex-1 min-w-0 min-h-0 overflow-hidden'
+    : `flex-1 min-w-0 ${hideNav ? '' : 'pb-20 md:pb-0'}`
   return (
     <div className={rootCls}>
       <Header
@@ -41,7 +47,10 @@ export default function Layout({
         showBack={showBack}
         onBack={onBack}
       />
-      <main className={mainCls}>{children}</main>
+      <div className={innerCls}>
+        {!hideNav && <DesktopSidebar />}
+        <main className={mainCls}>{children}</main>
+      </div>
       {!hideNav && <BottomNav />}
     </div>
   )
