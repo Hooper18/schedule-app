@@ -12,13 +12,24 @@ import {
   RotateCcw,
   Sparkles,
   Triangle,
+  Wallet,
 } from 'lucide-react'
 import Modal from '../../shared/Modal'
+import TopupModal from '../../TopupModal'
 import type { Course, EventSource, EventType, Semester } from '../../../lib/types'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useClaude } from '../../../hooks/useClaude'
 import { useCalendar } from '../../../hooks/useCalendar'
+import { useBalance } from '../../../hooks/useBalance'
+import {
+  deductBalance,
+  estimateCourseParseCostUsd,
+  formatCNY,
+  LOW_BALANCE_THRESHOLD_CNY,
+  refundBalance,
+  usdToCny,
+} from '../../../lib/balance'
 import type { FileKind } from '../../../lib/fileParsers'
 
 // Lazy-load fileParsers — same trick as FileImportPanel to keep the ~1MB
@@ -177,11 +188,14 @@ const MOODLE_IMPORT_SOURCES: EventSource[] = [
 ]
 
 interface AICourseState {
-  status: 'running' | 'success' | 'error'
+  status: 'running' | 'success' | 'error' | 'insufficient_balance'
   newEvents: MoodleEvent[]
   source: EventSource
   sourceFile: string
   error?: string
+  // Amount pre-deducted in CNY. Kept so error paths can refund the exact
+  // amount that was charged up front.
+  deductedCny?: number
 }
 
 export default function MoodleImportPanel({
@@ -194,6 +208,8 @@ export default function MoodleImportPanel({
   const { user } = useAuth()
   const { parseFileText, parseImage } = useClaude()
   const { entries: calendar } = useCalendar(semester.id)
+  const { balance, reload: reloadBalance } = useBalance()
+  const [topupOpen, setTopupOpen] = useState(false)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [filesOpen, setFilesOpen] = useState<Record<number, boolean>>({})
   const [saving, setSaving] = useState(false)
@@ -214,6 +230,39 @@ export default function MoodleImportPanel({
 
   const runAIParse = useCallback(
     async (ci: number, mc: MoodleCourse) => {
+      // Pre-deduct based on a rough upper-bound estimate. Billing happens
+      // here (not at import-save time) because the cost is incurred by the
+      // Claude API call, regardless of whether the user later keeps the
+      // events. Refunded in the catch block if the call fails.
+      const bytes = (mc.downloaded_files ?? []).reduce(
+        (s, f) => s + (f.size ?? 0),
+        0,
+      )
+      const chars = mc.page_content?.text?.length ?? 0
+      const costUsd = estimateCourseParseCostUsd(bytes, chars)
+      const costCny = Number(usdToCny(costUsd).toFixed(2))
+      const description = `Moodle 课件 AI 解析：${mc.course_code ?? mc.course_name ?? '未命名'}`
+
+      const deduct = await deductBalance(costCny, description)
+      if (!deduct.ok) {
+        const isInsufficient = deduct.message?.includes('insufficient balance')
+        setAIState((prev) => ({
+          ...prev,
+          [ci]: {
+            status: isInsufficient ? 'insufficient_balance' : 'error',
+            newEvents: [],
+            source: 'moodle_scan',
+            sourceFile: 'moodle_scan',
+            error: isInsufficient
+              ? `需要 ${formatCNY(costCny)}，余额不足`
+              : deduct.message || '扣费失败',
+          },
+        }))
+        reloadBalance()
+        return
+      }
+      reloadBalance()
+
       setAIState((prev) => ({
         ...prev,
         [ci]: {
@@ -221,6 +270,7 @@ export default function MoodleImportPanel({
           newEvents: [],
           source: 'moodle_scan',
           sourceFile: 'moodle_scan',
+          deductedCny: costCny,
         },
       }))
       try {
@@ -277,6 +327,9 @@ export default function MoodleImportPanel({
 
         const trimmed = combinedText.trim()
         if (!trimmed && !hasImage) {
+          // Nothing to send to Claude — refund the pre-deduct and bail.
+          await refundBalance(costCny, `${description}（无内容，退款）`)
+          reloadBalance()
           setAIState((prev) => ({
             ...prev,
             [ci]: {
@@ -332,10 +385,15 @@ export default function MoodleImportPanel({
             newEvents,
             source,
             sourceFile,
+            deductedCny: costCny,
           },
         }))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
+        // AI call failed after we already deducted — refund so the user
+        // isn't charged for a call that produced nothing.
+        await refundBalance(costCny, `${description}（失败退款）`)
+        reloadBalance()
         setAIState((prev) => ({
           ...prev,
           [ci]: {
@@ -348,7 +406,7 @@ export default function MoodleImportPanel({
         }))
       }
     },
-    [calendar, courses, parseFileText, parseImage, semester],
+    [calendar, courses, parseFileText, parseImage, semester, reloadBalance],
   )
 
   // Auto-select all events when a new payload arrives; also drop any overrides
@@ -706,8 +764,31 @@ export default function MoodleImportPanel({
     )
   }
 
+  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_CNY
+
   return (
     <section className="space-y-3">
+      <div
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+          lowBalance
+            ? 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+            : 'bg-card border-border text-dim'
+        }`}
+      >
+        <Wallet size={14} className="shrink-0" />
+        <span className="flex-1">
+          余额 {balance === null ? '…' : formatCNY(balance)}
+          {lowBalance && '（余额不足，AI 解析将跳过）'}
+        </span>
+        <button
+          type="button"
+          onClick={() => setTopupOpen(true)}
+          className="text-[11px] px-2 py-0.5 rounded bg-accent text-white font-medium"
+        >
+          充值
+        </button>
+      </div>
+
       <div className="flex items-center justify-between">
         <div className="text-xs text-dim">
           扫描到 {moodleData.length} 门课程 · 勾选 {totals.checked}/{totals.total} 条事件
@@ -816,7 +897,9 @@ export default function MoodleImportPanel({
                       ? 'bg-sky-500/10 text-sky-600'
                       : ai.status === 'success'
                         ? 'bg-emerald-500/10 text-emerald-600'
-                        : 'bg-red-500/10 text-red-600'
+                        : ai.status === 'insufficient_balance'
+                          ? 'bg-amber-500/10 text-amber-600'
+                          : 'bg-red-500/10 text-red-600'
                   }`}
                 >
                   {ai.status === 'running' && (
@@ -831,6 +914,28 @@ export default function MoodleImportPanel({
                       <span>
                         解析完成，发现 {ai.newEvents.length} 个新事件
                       </span>
+                    </>
+                  )}
+                  {ai.status === 'insufficient_balance' && (
+                    <>
+                      <Wallet size={12} className="shrink-0" />
+                      <span className="flex-1 truncate">
+                        {ai.error || '余额不足，未解析'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setTopupOpen(true)}
+                        className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded hover:bg-amber-500/20 shrink-0"
+                      >
+                        充值
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runAIParse(ci, originalMc)}
+                        className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded hover:bg-amber-500/20 shrink-0"
+                      >
+                        <RotateCcw size={10} /> 重试
+                      </button>
                     </>
                   )}
                   {ai.status === 'error' && (
@@ -1019,6 +1124,8 @@ export default function MoodleImportPanel({
           )
         }
       />
+
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </section>
   )
 }
