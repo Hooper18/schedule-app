@@ -413,7 +413,7 @@ const AUTO_SELECT_KEYWORDS = [
   "course info", "course_info", "courseinformation",
   "group assignment", "individual assignment",
   "introduction", "course plan", "courseplan",
-  "cover page", "coverpage", "module", "chapter",
+  "cover page", "coverpage", "chapter",
 ]
 
 function autoSelectByKeyword(name) {
