@@ -11,6 +11,7 @@ import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
 import EventCard from '../shared/EventCard'
 import EventModal from '../shared/EventModal'
+import DayDetailPanel from './DayDetailPanel'
 import type { Event, Course, WeeklySchedule, EventType } from '../../lib/types'
 import {
   addMonths,
@@ -127,7 +128,9 @@ export default function CalendarView() {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col md:flex-row">
+      {/* Left column: top bar, month grid, and (mobile only) event list */}
+      <div className="flex-1 flex flex-col min-w-0">
       {/* Month controls + view toggle — fixed (does NOT scroll) */}
       <div className="shrink-0 bg-main border-b border-border">
         <div className="flex items-center justify-between gap-2 px-4 py-3">
@@ -187,8 +190,10 @@ export default function CalendarView() {
         />
       </div>
 
-      {/* Events for selected day — scrolls independently, no visible scrollbar */}
-      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-3 pb-24 md:pb-4">
+      {/* Events for selected day — scrolls independently, no visible
+          scrollbar. Hidden on desktop; DayDetailPanel on the right handles
+          the same content there. */}
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-3 pb-24 md:hidden">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-semibold text-text">
@@ -228,6 +233,18 @@ export default function CalendarView() {
           </div>
         )}
       </div>
+
+      </div>
+      {/* Right detail panel — desktop only */}
+      <DayDetailPanel
+        selectedDate={selected}
+        events={events}
+        courseMap={courseMap}
+        semester={semester}
+        onToggle={setStatus}
+        onEdit={setEditing}
+        onSelectDate={setSelected}
+      />
 
       <EventModal
         event={editing}
