@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { useSemesterBootstrap } from './hooks/useSemesterBootstrap'
 import AuthPage from './pages/Auth'
+import ResetPassword from './pages/ResetPassword'
 import Timeline from './pages/Timeline'
 import CalendarPage from './pages/Calendar'
 import Courses from './pages/Courses'
@@ -33,11 +34,15 @@ function Protected({ children }: { children: ReactNode }) {
 }
 
 function AppRoutes() {
-  const { user, loading } = useAuth()
+  const { user, loading, isRecoverySession } = useAuth()
   if (loading) return <Loading />
   return (
     <Routes>
-      <Route path="/auth" element={user ? <Navigate to="/" replace /> : <AuthPage />} />
+      <Route
+        path="/auth"
+        element={user && !isRecoverySession ? <Navigate to="/" replace /> : <AuthPage />}
+      />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={<Protected><Timeline /></Protected>} />
       <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
       <Route path="/courses" element={<Protected><Courses /></Protected>} />
