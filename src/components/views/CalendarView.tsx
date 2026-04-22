@@ -175,6 +175,7 @@ export default function CalendarView() {
   const { semester } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
   const { events, setStatus, reload } = useEvents(semester?.id)
+  const isDesktop = useIsDesktop()
 
   const [cursor, setCursor] = useState<Date>(startOfMonth(new Date()))
   const [selected, setSelected] = useState<string>(isoOf(new Date()))
@@ -188,6 +189,14 @@ export default function CalendarView() {
     }
   }
   const [editing, setEditing] = useState<Event | null>(null)
+
+  // On mobile the month grid has no bottom detail drawer, so tapping a day
+  // jumps straight into the day view. On desktop the right panel already
+  // mirrors the selection, so just update the cursor.
+  const selectDateFromMonthCell = (iso: string) => {
+    setSelected(iso)
+    if (!isDesktop) setMode('day')
+  }
   const [layers, setLayers] = useState<Layers>({
     showEvents: true,
     showCourses: true,
@@ -268,7 +277,7 @@ export default function CalendarView() {
   if (mode === 'week') {
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="p-3 border-b border-border flex flex-col md:flex-row items-center justify-center gap-2 shrink-0">
+        <div className="p-2 md:p-3 border-b border-border flex flex-row flex-wrap items-center justify-center gap-2 shrink-0">
           <ViewSwitcher mode={mode} onChange={setMode} />
           <LayerToggle layers={layers} onChange={setLayers} />
         </div>
@@ -350,68 +359,8 @@ export default function CalendarView() {
           scheduleByDay={scheduleByDay}
           courseMap={courseMap}
           layers={layers}
-          onSelect={setSelected}
+          onSelect={selectDateFromMonthCell}
         />
-      </div>
-
-      {/* Mobile: selected-day detail drawer. Swipe-less day paging via the
-          arrow buttons, so users don't have to tap back up into the grid. */}
-      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 pt-2 pb-24 space-y-3 md:hidden">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setSelected((iso) => shiftDate(iso, -1))}
-            className="p-1.5 rounded hover:bg-hover text-dim"
-            aria-label="前一天"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <div className="flex-1 min-w-0 text-center">
-            <div className="text-sm font-semibold text-text truncate">
-              {formatSelectedLabel(selected)}
-            </div>
-            <div className="text-[11px] text-dim">
-              {selectedEvents.length === 0
-                ? '无事件'
-                : `${selectedEvents.length} 条事件`}
-              {daySchedule.length > 0 && ` · ${daySchedule.length} 节课`}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSelected((iso) => shiftDate(iso, 1))}
-            className="p-1.5 rounded hover:bg-hover text-dim"
-            aria-label="后一天"
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
-
-        {/* Only render the event list when there are events — the big empty
-            box took up too much vertical space for a "no events" signal the
-            header row already communicates. */}
-        {layers.showEvents && selectedEvents.length > 0 && (
-          <div className="space-y-2">
-            {selectedEvents.map((e) => (
-              <EventCard
-                key={e.id}
-                event={e}
-                course={e.course_id ? courseMap[e.course_id] : undefined}
-                semester={semester}
-                onToggle={setStatus}
-                onEdit={setEditing}
-              />
-            ))}
-          </div>
-        )}
-
-        {layers.showCourses && (
-          <DayCourseList
-            date={selected}
-            schedule={daySchedule}
-            courseMap={courseMap}
-          />
-        )}
       </div>
 
       </div>
@@ -442,14 +391,6 @@ function shiftDate(iso: string, delta: number): string {
   const d = parseDate(iso)
   d.setDate(d.getDate() + delta)
   return isoOf(d)
-}
-
-function formatSelectedLabel(iso: string): string {
-  const d = parseDate(iso)
-  const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
-  const today = isoOf(new Date())
-  const suffix = iso === today ? ' · 今天' : ''
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} 周${wd}${suffix}`
 }
 
 function buildMonthGrid(cursor: Date): Date[] {
@@ -893,6 +834,11 @@ function WeekView({
   // vertical scroll; desktop keeps the roomier default.
   const HOUR_PX_WEEK = isDesktop ? 56 : 40
   const AXIS_WIDTH = isDesktop ? 56 : 36
+  // Mobile: enforce a per-column minimum so course names/locations stay
+  // legible and the grid becomes horizontally scrollable. Desktop fills the
+  // available width (min 0) like before.
+  const COLUMN_MIN = isDesktop ? 0 : 82
+  const gridTemplate = `${AXIS_WIDTH}px repeat(7, minmax(${COLUMN_MIN}px, 1fr))`
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60 * 1000)
@@ -1007,10 +953,8 @@ function WeekView({
             template so each pill's center aligns exactly with its column
             below. Hidden on desktop (the grid's inline header takes over). */}
         <div
-          className="md:hidden sticky top-0 z-30 bg-main border-b border-border px-1 py-1.5 grid md:min-w-[800px]"
-          style={{
-            gridTemplateColumns: `${AXIS_WIDTH}px repeat(7, minmax(0, 1fr))`,
-          }}
+          className="md:hidden sticky top-0 z-30 bg-main border-b border-border px-1 py-1.5 grid"
+          style={{ gridTemplateColumns: gridTemplate }}
         >
           <div aria-hidden />
           {weekDays.map((day) => {
@@ -1050,9 +994,7 @@ function WeekView({
 
         <div
           className="grid md:min-w-[800px]"
-          style={{
-            gridTemplateColumns: `${AXIS_WIDTH}px repeat(7, minmax(0, 1fr))`,
-          }}
+          style={{ gridTemplateColumns: gridTemplate }}
         >
           {/* Desktop-only header row (8 cells). Hidden on mobile so the pill
               strip above acts as the column labels instead. */}
