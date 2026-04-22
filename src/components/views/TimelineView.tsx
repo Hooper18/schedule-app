@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Link2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Link2 } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
@@ -45,6 +45,19 @@ export default function TimelineView() {
     eventIds: string[]
     hintCode: string | null
   } | null>(null)
+  // "All groups" broadcast: flipping `defaultOpen` + bumping `epoch` forces
+  // every CourseGroup to re-sync to the new open state. Local per-group
+  // toggles afterwards remain independent until the next broadcast.
+  const [groupBroadcast, setGroupBroadcast] = useState({
+    epoch: 0,
+    defaultOpen: true,
+  })
+
+  const toggleAllGroups = () =>
+    setGroupBroadcast((prev) => ({
+      epoch: prev.epoch + 1,
+      defaultOpen: !prev.defaultOpen,
+    }))
 
   const courseMap = useMemo(
     () => Object.fromEntries(courses.map((c) => [c.id, c])),
@@ -117,19 +130,41 @@ export default function TimelineView() {
       />
 
       <div className="p-4 space-y-3">
-        <div className="flex items-center justify-between text-xs text-dim">
-          <div>
+        <div className="flex items-center justify-between gap-3 text-xs text-dim">
+          <div className="shrink-0">
             {semester.code} · {filtered.length} events
           </div>
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showDone}
-              onChange={(e) => setShowDone(e.target.checked)}
-              className="accent-accent"
-            />
-            显示已完成
-          </label>
+          <div className="flex items-center gap-3">
+            {groupMode === 'course' && (
+              <button
+                type="button"
+                onClick={toggleAllGroups}
+                className="flex items-center gap-1 text-dim hover:text-text transition-colors"
+                title={groupBroadcast.defaultOpen ? '全部收起' : '全部展开'}
+              >
+                {groupBroadcast.defaultOpen ? (
+                  <>
+                    <ChevronsDownUp size={13} />
+                    <span>全部收起</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronsUpDown size={13} />
+                    <span>全部展开</span>
+                  </>
+                )}
+              </button>
+            )}
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showDone}
+                onChange={(e) => setShowDone(e.target.checked)}
+                className="accent-accent"
+              />
+              显示已完成
+            </label>
+          </div>
         </div>
 
         {groupMode === 'time' ? (
@@ -151,6 +186,7 @@ export default function TimelineView() {
             onReassign={(eventIds, hintCode) =>
               setReassign({ eventIds, hintCode })
             }
+            groupBroadcast={groupBroadcast}
           />
         )}
       </div>
@@ -239,6 +275,7 @@ interface ByCourseProps {
   onToggle: (id: string, status: 'pending' | 'completed') => void
   onEdit: (e: Event) => void
   onReassign: (eventIds: string[], hintCode: string | null) => void
+  groupBroadcast: { epoch: number; defaultOpen: boolean }
 }
 
 function ByCourse({
@@ -248,6 +285,7 @@ function ByCourse({
   onToggle,
   onEdit,
   onReassign,
+  groupBroadcast,
 }: ByCourseProps) {
   // Group by course_id; sort within each group by date (tbd last), and courses
   // by their original sort_order (preserved from the courses query).
@@ -320,6 +358,7 @@ function ByCourse({
                 c.code,
               )
             }
+            broadcast={groupBroadcast}
           />
         )
       })}
@@ -400,6 +439,7 @@ interface CourseGroupProps {
   onToggle: (id: string, status: 'pending' | 'completed') => void
   onEdit: (e: Event) => void
   onReassign: () => void
+  broadcast: { epoch: number; defaultOpen: boolean }
 }
 
 function CourseGroup({
@@ -411,8 +451,16 @@ function CourseGroup({
   onToggle,
   onEdit,
   onReassign,
+  broadcast,
 }: CourseGroupProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(broadcast.defaultOpen)
+  // React to "expand/collapse all" broadcasts. Ignore `defaultOpen` change
+  // alone — only an epoch bump means the user clicked the global toggle, so
+  // local manual toggles aren't clobbered by unrelated parent re-renders.
+  useEffect(() => {
+    setOpen(broadcast.defaultOpen)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcast.epoch])
   const pending = events.filter((e) => e.status !== 'completed').length
 
   return (
