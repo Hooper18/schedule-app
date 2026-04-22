@@ -296,9 +296,13 @@ export default function CalendarView() {
   }
 
   return (
-    <div className="h-full flex flex-col md:flex-row">
-      {/* Left column: top bar, month grid, and (mobile only) event list */}
-      <div className="flex-1 flex flex-col min-w-0">
+    <div className="h-full flex flex-col md:flex-row overflow-hidden">
+      {/* Left column: top bar, month grid, and (mobile only) event list.
+          `min-h-0` is critical — without it, the implicit min-height: auto on
+          flex items lets this column grow past the parent, which disables
+          the inner drawer's overflow-y scroll and bubbles the gesture up to
+          the viewport (dragging the whole month grid with it). */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
       {/* Month controls + view toggle — fixed (does NOT scroll) */}
       <div className="shrink-0 bg-main border-b border-border">
         <div className="flex items-center justify-between gap-2 px-3 md:px-4 py-2 md:py-3">
@@ -358,7 +362,9 @@ export default function CalendarView() {
           list — the month grid already communicates that. Only renders when
           the selected day actually has classes, so empty days stay clean. */}
       {layers.showCourses && daySchedule.length > 0 && (
-        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 py-2 pb-24 md:hidden">
+        // overscroll-contain prevents reach-boundary gestures from bubbling
+        // up and dragging the month grid / page along on iOS & Android.
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar px-3 py-2 pb-24 md:hidden">
           <DayCourseList
             date={selected}
             schedule={daySchedule}
