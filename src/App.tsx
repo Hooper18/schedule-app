@@ -50,7 +50,9 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/" element={<Protected><Timeline /></Protected>} />
         <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
-        <Route path="/weekly" element={<Protected><WeeklySchedule /></Protected>} />
+        <Route path="/timetable" element={<Protected><WeeklySchedule /></Protected>} />
+        {/* Legacy URL; keeps bookmarks working after rename to /timetable. */}
+        <Route path="/weekly" element={<Navigate to="/timetable" replace />} />
         <Route path="/courses" element={<Protected><Courses /></Protected>} />
         <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
         <Route path="/import" element={<Protected><Import /></Protected>} />

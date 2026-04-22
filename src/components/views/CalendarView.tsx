@@ -1,11 +1,9 @@
 import { Fragment, useMemo, useState } from 'react'
 import {
   ArrowLeft,
-  ArrowRight,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
@@ -22,9 +20,40 @@ import {
 } from '../../lib/utils'
 import { weekLabel } from '../../constants/semester'
 
-type Mode = 'month' | 'day'
+type Mode = 'month' | 'week' | 'day'
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
+
+const MODE_LABELS: Record<Mode, string> = { month: '月', week: '周', day: '日' }
+
+// Shared pill switcher rendered in both the desktop month header and the
+// mobile sub-header row. Keeps visual language identical across breakpoints.
+function ViewSwitcher({
+  mode,
+  onChange,
+}: {
+  mode: Mode
+  onChange: (m: Mode) => void
+}) {
+  return (
+    <div className="inline-flex bg-card rounded-full p-1 border border-border">
+      {(['month', 'week', 'day'] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => onChange(m)}
+          className={`px-4 py-1 rounded-full text-xs font-medium transition-colors ${
+            mode === m
+              ? 'bg-accent text-white shadow-sm'
+              : 'text-dim hover:text-text'
+          }`}
+        >
+          {MODE_LABELS[m]}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 // Desktop pill palette — soft light bg + dark text, with dark-mode variants.
 // Distinct from the existing solid-color badge classes (typeColor) so we can
@@ -51,7 +80,6 @@ function eventPillClass(type: EventType): string {
 }
 
 export default function CalendarView() {
-  const navigate = useNavigate()
   const { semester } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
   const { events, setStatus, reload } = useEvents(semester?.id)
@@ -105,6 +133,9 @@ export default function CalendarView() {
   if (mode === 'day') {
     return (
       <div className="h-full overflow-y-auto no-scrollbar">
+        <div className="p-3 border-b border-border flex items-center justify-center">
+          <ViewSwitcher mode={mode} onChange={setMode} />
+        </div>
         <DayView
           date={selected}
           events={selectedEvents}
@@ -123,6 +154,19 @@ export default function CalendarView() {
           onClose={() => setEditing(null)}
           onSaved={reload}
         />
+      </div>
+    )
+  }
+
+  if (mode === 'week') {
+    return (
+      <div className="h-full flex flex-col overflow-hidden">
+        <div className="p-3 border-b border-border flex items-center justify-center">
+          <ViewSwitcher mode={mode} onChange={setMode} />
+        </div>
+        <div className="flex-1 flex items-center justify-center text-dim text-sm">
+          周视图开发中
+        </div>
       </div>
     )
   }
@@ -154,21 +198,8 @@ export default function CalendarView() {
             </button>
           </div>
           <div className="flex items-center gap-2">
-            {/* Desktop-only view switcher */}
-            <div className="hidden md:flex bg-card rounded-full p-1 border border-border">
-              <button
-                type="button"
-                className="px-3 py-1 rounded-full text-xs font-medium bg-main text-text shadow-sm"
-              >
-                月
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/')}
-                className="px-3 py-1 rounded-full text-xs font-medium text-dim hover:text-text"
-              >
-                日程
-              </button>
+            <div className="hidden md:block">
+              <ViewSwitcher mode={mode} onChange={setMode} />
             </div>
             <button
               type="button"
@@ -178,6 +209,11 @@ export default function CalendarView() {
               Today
             </button>
           </div>
+        </div>
+        {/* Mobile-only view switcher below the title row. Desktop shows it
+            inline with the month controls above. */}
+        <div className="md:hidden px-4 pb-3 flex justify-center">
+          <ViewSwitcher mode={mode} onChange={setMode} />
         </div>
         <MonthGrid
           grid={grid}
@@ -205,13 +241,6 @@ export default function CalendarView() {
                 : `${selectedEvents.length} 条事件`}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setMode('day')}
-            className="text-xs text-accent hover:underline flex items-center gap-1"
-          >
-            查看日视图 <ArrowRight size={12} />
-          </button>
         </div>
 
         {selectedEvents.length === 0 ? (

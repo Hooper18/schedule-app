@@ -3,7 +3,7 @@ import TimelineView from '../components/views/TimelineView'
 
 export default function Timeline() {
   return (
-    <Layout title="Timeline">
+    <Layout title="待办事项">
       <TimelineView />
     </Layout>
   )

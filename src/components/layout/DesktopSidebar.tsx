@@ -1,14 +1,12 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  Clock,
+  ListChecks,
   Calendar,
-  BookOpen,
+  LayoutGrid,
   Plus,
   Settings,
-  CalendarRange,
   HelpCircle,
-  LayoutGrid,
 } from 'lucide-react'
 import HelpModal from '../HelpModal'
 
@@ -18,15 +16,13 @@ import HelpModal from '../HelpModal'
 const items: Array<{
   to: string
   label: string
-  Icon: typeof Clock
+  Icon: typeof ListChecks
   end?: boolean
 }> = [
-  { to: '/', label: 'Timeline', Icon: Clock, end: true },
-  { to: '/calendar', label: 'Calendar', Icon: Calendar },
-  { to: '/weekly', label: '课表', Icon: LayoutGrid },
-  { to: '/courses', label: 'Courses', Icon: BookOpen },
-  { to: '/academic', label: '校历', Icon: CalendarRange },
-  { to: '/import', label: 'Add', Icon: Plus },
+  { to: '/', label: '待办', Icon: ListChecks, end: true },
+  { to: '/calendar', label: '日历', Icon: Calendar },
+  { to: '/timetable', label: '课表', Icon: LayoutGrid },
+  { to: '/import', label: '添加', Icon: Plus },
 ]
 
 export default function DesktopSidebar() {
