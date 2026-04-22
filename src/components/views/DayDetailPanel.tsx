@@ -83,36 +83,63 @@ export default function DayDetailPanel({
   const daySchedule = scheduleByDay.get(d.getDay()) ?? []
   const isToday = selectedDate === isoOf(new Date())
 
-  // Current / next session (today only). "Current" = nowMin is inside
-  // [start, end). "Next" = the session that starts *after* whatever's
-  // current (or after now if nothing is current). `minsRemaining` /
-  // `minsUntil` live on this struct so the UI can show countdowns.
-  const { currentSession, nextSession, minsRemaining, minsUntil } = useMemo(() => {
-    if (!isToday) {
-      return {
-        currentSession: null,
-        nextSession: null,
-        minsRemaining: 0,
-        minsUntil: 0,
+  // Current (today-only) + the next session *chronologically*. The "next"
+  // is allowed to spill into tomorrow and beyond — if nothing is scheduled
+  // for the rest of today we walk forward up to 7 days (one schedule cycle)
+  // through scheduleByDay to find the earliest class on the next day that
+  // has one. `minsUntil` is only meaningful for offset 0; other offsets
+  // render a weekday label instead of a minute countdown.
+  const { currentSession, nextSession, nextOffset, minsRemaining, minsUntil } =
+    useMemo(() => {
+      if (!isToday) {
+        return {
+          currentSession: null,
+          nextSession: null as WeeklySchedule | null,
+          nextOffset: 0,
+          minsRemaining: 0,
+          minsUntil: 0,
+        }
       }
-    }
-    const now = new Date()
-    const nowMin = now.getHours() * 60 + now.getMinutes()
-    const cur =
-      daySchedule.find(
-        (s) => nowMin >= toMin(s.start_time) && nowMin < toMin(s.end_time),
-      ) ?? null
-    const afterMin = cur ? toMin(cur.end_time) : nowMin
-    const nxt = daySchedule.find((s) => toMin(s.start_time) >= afterMin) ?? null
-    return {
-      currentSession: cur,
-      nextSession: nxt,
-      minsRemaining: cur ? toMin(cur.end_time) - nowMin : 0,
-      minsUntil: nxt ? toMin(nxt.start_time) - nowMin : 0,
-    }
-  }, [isToday, daySchedule])
+      const now = new Date()
+      const nowMin = now.getHours() * 60 + now.getMinutes()
+      const todayDow = now.getDay()
 
-  const highlightSession = currentSession ?? nextSession
+      const cur =
+        daySchedule.find(
+          (s) => nowMin >= toMin(s.start_time) && nowMin < toMin(s.end_time),
+        ) ?? null
+      const afterMin = cur ? toMin(cur.end_time) : nowMin
+
+      // Today first (after the currently in-progress session if any).
+      const todayNext =
+        daySchedule.find((s) => toMin(s.start_time) >= afterMin) ?? null
+
+      let nxt: WeeklySchedule | null = todayNext
+      let offset = 0
+      if (!todayNext) {
+        // Walk forward up to 7 days. scheduleByDow() already sorts each
+        // day's sessions by start_time, so arr[0] is the first class.
+        for (let i = 1; i <= 7; i++) {
+          const dow = (todayDow + i) % 7
+          const arr = scheduleByDay.get(dow) ?? []
+          if (arr.length > 0) {
+            nxt = arr[0]
+            offset = i
+            break
+          }
+        }
+      }
+
+      return {
+        currentSession: cur,
+        nextSession: nxt,
+        nextOffset: offset,
+        minsRemaining: cur ? toMin(cur.end_time) - nowMin : 0,
+        minsUntil: nxt && offset === 0 ? toMin(nxt.start_time) - nowMin : 0,
+      }
+    }, [isToday, daySchedule, scheduleByDay])
+
+  const highlightSession = currentSession ?? (nextOffset === 0 ? nextSession : null)
 
   return (
     <aside className="hidden md:flex md:flex-col md:w-64 md:border-l md:border-border md:bg-card/40">
@@ -165,21 +192,21 @@ export default function DayDetailPanel({
                     }
                     minsRemaining={minsRemaining}
                   />
-                  {nextSession ? (
+                  {/* A subtle "already ended today" caption when today's
+                      classes are all done but a later day still has one. */}
+                  {!currentSession && nextOffset > 0 && daySchedule.length > 0 && (
+                    <div className="text-[10px] text-dim px-1">
+                      今日课程已结束
+                    </div>
+                  )}
+                  {nextSession && (
                     <NextClassCard
                       session={nextSession}
                       course={courseMap[nextSession.course_id] ?? null}
+                      offset={nextOffset}
                       minsUntil={minsUntil}
                     />
-                  ) : currentSession ? (
-                    <div className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[11px] text-dim">
-                      这是今天最后一节课
-                    </div>
-                  ) : daySchedule.length > 0 ? (
-                    <div className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[11px] text-dim">
-                      今日课程已结束
-                    </div>
-                  ) : null}
+                  )}
                 </div>
               )}
               {daySchedule.length === 0 ? (
@@ -326,26 +353,40 @@ function CurrentClassCard({
   )
 }
 
+const DAY_NAMES_SHORT = ['日', '一', '二', '三', '四', '五', '六']
+
+function relativeDayLabel(offset: number, sessionDow: number): string {
+  if (offset === 1) return '明天'
+  if (offset >= 2 && offset <= 6) return `周${DAY_NAMES_SHORT[sessionDow]}`
+  if (offset === 7) return `下周${DAY_NAMES_SHORT[sessionDow]}`
+  return ''
+}
+
 function NextClassCard({
   session,
   course,
+  offset,
   minsUntil,
 }: {
   session: WeeklySchedule
   course: Course | null
+  offset: number
   minsUntil: number
 }) {
+  const badge =
+    offset === 0
+      ? minsUntil <= 0
+        ? '即将开始'
+        : `${formatDuration(minsUntil)}后`
+      : relativeDayLabel(offset, session.day_of_week)
+
   return (
     <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 space-y-1">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[10px] font-semibold text-accent/80 uppercase tracking-wider">
           下一节课
         </div>
-        <div className="text-[10px] text-accent/80 font-medium">
-          {minsUntil <= 0
-            ? '即将开始'
-            : `${formatDuration(minsUntil)}后`}
-        </div>
+        <div className="text-[10px] text-accent/80 font-medium">{badge}</div>
       </div>
       <div className="text-sm font-semibold text-text font-mono">
         {course?.code ?? '未知课程'}
