@@ -8,9 +8,23 @@ interface Props {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
+  size?: 'md' | 'lg' | '2xl'
 }
 
-export default function Modal({ open, title, onClose, children, footer }: Props) {
+const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
+  md: 'sm:max-w-md',
+  lg: 'sm:max-w-lg',
+  '2xl': 'sm:max-w-2xl',
+}
+
+export default function Modal({
+  open,
+  title,
+  onClose,
+  children,
+  footer,
+  size = 'md',
+}: Props) {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -33,7 +47,7 @@ export default function Modal({ open, title, onClose, children, footer }: Props)
       onClick={onClose}
     >
       <div
-        className="w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl bg-main border border-border max-h-[92vh] flex flex-col"
+        className={`w-full ${SIZE_CLASS[size]} sm:rounded-2xl rounded-t-2xl bg-main border border-border max-h-[92vh] flex flex-col`}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
