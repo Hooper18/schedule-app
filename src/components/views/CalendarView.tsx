@@ -278,8 +278,8 @@ export default function CalendarView() {
       <div className="flex-1 flex flex-col min-w-0">
       {/* Month controls + view toggle — fixed (does NOT scroll) */}
       <div className="shrink-0 bg-main border-b border-border">
-        <div className="flex items-center justify-between gap-2 px-4 py-3">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 px-3 md:px-4 py-2 md:py-3">
+          <div className="flex items-center gap-1 md:gap-2">
             <button
               onClick={() => setCursor((c) => addMonths(c, -1))}
               className="p-1.5 rounded hover:bg-hover text-dim"
@@ -312,8 +312,9 @@ export default function CalendarView() {
             </button>
           </div>
         </div>
-        {/* Mobile-only switcher + layer toggles below the title row. */}
-        <div className="md:hidden px-4 pb-3 flex flex-col items-center gap-2">
+        {/* Mobile-only switcher + layer toggles below the title row. Merged
+            onto a single row to save vertical space. */}
+        <div className="md:hidden px-3 pb-1.5 flex items-center justify-center gap-2 flex-wrap">
           <ViewSwitcher mode={mode} onChange={setMode} />
           <LayerToggle layers={layers} onChange={setLayers} />
         </div>
@@ -330,38 +331,55 @@ export default function CalendarView() {
         />
       </div>
 
-      {/* Mobile: selected-day event + course list */}
-      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-4 pb-24 md:hidden">
-        <div>
-          <div className="text-sm font-semibold text-text">
-            {formatSelectedLabel(selected)}
+      {/* Mobile: selected-day detail drawer. Swipe-less day paging via the
+          arrow buttons, so users don't have to tap back up into the grid. */}
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 pt-2 pb-24 space-y-3 md:hidden">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setSelected((iso) => shiftDate(iso, -1))}
+            className="p-1.5 rounded hover:bg-hover text-dim"
+            aria-label="前一天"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <div className="flex-1 min-w-0 text-center">
+            <div className="text-sm font-semibold text-text truncate">
+              {formatSelectedLabel(selected)}
+            </div>
+            <div className="text-[11px] text-dim">
+              {selectedEvents.length === 0
+                ? '无事件'
+                : `${selectedEvents.length} 条事件`}
+              {daySchedule.length > 0 && ` · ${daySchedule.length} 节课`}
+            </div>
           </div>
-          <div className="text-xs text-dim">
-            {selectedEvents.length === 0
-              ? '无事件'
-              : `${selectedEvents.length} 条事件`}
-          </div>
+          <button
+            type="button"
+            onClick={() => setSelected((iso) => shiftDate(iso, 1))}
+            className="p-1.5 rounded hover:bg-hover text-dim"
+            aria-label="后一天"
+          >
+            <ChevronRight size={16} />
+          </button>
         </div>
 
-        {layers.showEvents && (
-          selectedEvents.length === 0 ? (
-            <div className="text-sm text-dim py-8 text-center bg-card rounded-xl border border-border">
-              今日无事件
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {selectedEvents.map((e) => (
-                <EventCard
-                  key={e.id}
-                  event={e}
-                  course={e.course_id ? courseMap[e.course_id] : undefined}
-                  semester={semester}
-                  onToggle={setStatus}
-                  onEdit={setEditing}
-                />
-              ))}
-            </div>
-          )
+        {/* Only render the event list when there are events — the big empty
+            box took up too much vertical space for a "no events" signal the
+            header row already communicates. */}
+        {layers.showEvents && selectedEvents.length > 0 && (
+          <div className="space-y-2">
+            {selectedEvents.map((e) => (
+              <EventCard
+                key={e.id}
+                event={e}
+                course={e.course_id ? courseMap[e.course_id] : undefined}
+                semester={semester}
+                onToggle={setStatus}
+                onEdit={setEditing}
+              />
+            ))}
+          </div>
         )}
 
         {layers.showCourses && (
@@ -458,8 +476,8 @@ function MonthGrid({
   for (let i = 0; i < 6; i++) rows.push(grid.slice(i * 7, i * 7 + 7))
 
   return (
-    <div className="p-2">
-      <div className="grid grid-cols-7 md:grid-cols-[36px_repeat(7,1fr)] text-center text-[11px] font-medium text-muted py-2">
+    <div className="p-1 md:p-2">
+      <div className="grid grid-cols-7 md:grid-cols-[36px_repeat(7,1fr)] text-center text-[11px] font-semibold text-muted py-0.5 md:py-2">
         <div className="hidden md:block" />
         {WEEKDAYS.map((w, i) => (
           <div key={w} className={i === 0 ? 'text-red-500' : ''}>
