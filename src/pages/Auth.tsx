@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { CalendarDays, Sparkles, Chrome, Download } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import PasswordInput from '../components/PasswordInput'
 import TermsModal from '../components/TermsModal'
@@ -108,30 +109,105 @@ export default function AuthPage() {
     (mode === 'signup' && (!agreedTerms || passwordMismatch))
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-6 bg-main text-text">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-semibold">XMUM Schedule</h1>
-          <p className="text-xs text-muted mt-1">AI 辅助课程日程管理</p>
-        </div>
+    <div className="min-h-screen bg-main text-text md:grid md:grid-cols-2">
+      {/* Left brand panel — desktop only */}
+      <aside className="hidden md:flex relative overflow-hidden items-center justify-center p-12 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent border-r border-border">
+        <div className="absolute -top-24 -left-24 w-72 h-72 rounded-full bg-accent/10 blur-3xl" aria-hidden />
+        <div className="absolute -bottom-32 -right-20 w-80 h-80 rounded-full bg-accent/10 blur-3xl" aria-hidden />
 
-        <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-dim leading-relaxed space-y-2">
-          <p>
-            把分散在 AC Online、Moodle、课件里的 <span className="text-text">课程 / 作业 / 考试 DDL</span> 集中到一个时间线里，自动去重、按周月日视图查看、到期前提醒。给 XMUM 学生自用的工具。
-          </p>
-          <p>
-            配套 Chrome 扩展可一键抓取课程表与 Moodle DDL。
-            <a
-              href="/extensions.7z"
-              download
-              className="text-accent hover:underline ml-1"
-            >
-              下载扩展包 (.7z)
-            </a>
-          </p>
-        </div>
+        <div className="relative max-w-md space-y-8">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/30 flex items-center justify-center">
+              <CalendarDays className="text-accent" size={22} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">XMUM Schedule</h1>
+              <p className="text-xs text-muted mt-0.5">AI 辅助课程日程管理</p>
+            </div>
+          </div>
 
-        {mode !== 'forgot' && (
+          <p className="text-sm text-dim leading-relaxed">
+            把分散在 <span className="text-text">AC Online</span>、<span className="text-text">Moodle</span>、课件里的课程 / 作业 / 考试 DDL 集中到一个时间线里，自动去重、按周月日视图查看、到期前提醒。给 XMUM 学生自用的工具。
+          </p>
+
+          <ul className="space-y-3 text-sm">
+            <li className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-card border border-border flex items-center justify-center shrink-0">
+                <Sparkles size={14} className="text-accent" />
+              </div>
+              <div>
+                <div className="font-medium text-text">AI 识别 DDL</div>
+                <div className="text-xs text-dim mt-0.5">上传课件或粘贴课程表，自动提取截止日期</div>
+              </div>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-card border border-border flex items-center justify-center shrink-0">
+                <CalendarDays size={14} className="text-accent" />
+              </div>
+              <div>
+                <div className="font-medium text-text">学期 / 周 / 月视图</div>
+                <div className="text-xs text-dim mt-0.5">按学期周次展示课程，配套校历公假与复习周</div>
+              </div>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-card border border-border flex items-center justify-center shrink-0">
+                <Chrome size={14} className="text-accent" />
+              </div>
+              <div>
+                <div className="font-medium text-text">一键浏览器扩展</div>
+                <div className="text-xs text-dim mt-0.5">Chrome 插件直接抓取课程表与 Moodle DDL</div>
+              </div>
+            </li>
+          </ul>
+
+          <a
+            href="/extensions.7z"
+            download
+            className="inline-flex items-center gap-1.5 text-xs text-accent hover:underline"
+          >
+            <Download size={12} /> 下载 Chrome 扩展包 (.7z)
+          </a>
+        </div>
+      </aside>
+
+      {/* Form panel */}
+      <div className="flex items-center justify-center px-6 py-10 md:py-12">
+        <form
+          onSubmit={submit}
+          className="w-full max-w-sm space-y-4 md:bg-card md:border md:border-border md:rounded-2xl md:shadow-sm md:p-8"
+        >
+          <div className="text-center mb-2 md:mb-4">
+            <h1 className="text-2xl font-semibold md:hidden">XMUM Schedule</h1>
+            <p className="text-xs text-muted mt-1 md:hidden">AI 辅助课程日程管理</p>
+            <h2 className="hidden md:block text-lg font-semibold">
+              {mode === 'signin' ? '欢迎回来' : mode === 'signup' ? '创建账户' : '重置密码'}
+            </h2>
+            <p className="hidden md:block text-xs text-muted mt-1">
+              {mode === 'signin'
+                ? '继续管理你的课程与 DDL'
+                : mode === 'signup'
+                  ? '仅需邮箱即可开始使用'
+                  : '输入注册邮箱以接收重置链接'}
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-dim leading-relaxed space-y-2 md:hidden">
+            <p>
+              把分散在 AC Online、Moodle、课件里的 <span className="text-text">课程 / 作业 / 考试 DDL</span> 集中到一个时间线里，自动去重、按周月日视图查看、到期前提醒。给 XMUM 学生自用的工具。
+            </p>
+            <p>
+              配套 Chrome 扩展可一键抓取课程表与 Moodle DDL。
+              <a
+                href="/extensions.7z"
+                download
+                className="text-accent hover:underline ml-1"
+              >
+                下载扩展包 (.7z)
+              </a>
+            </p>
+          </div>
+
+          {mode !== 'forgot' && (
           <div className="flex gap-2 bg-card rounded-lg p-1 border border-border">
             <button
               type="button"
@@ -282,7 +358,8 @@ export default function AuthPage() {
             返回登录
           </button>
         )}
-      </form>
+        </form>
+      </div>
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </div>
