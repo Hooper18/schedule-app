@@ -414,6 +414,7 @@ const AUTO_SELECT_KEYWORDS = [
   "group assignment", "individual assignment",
   "introduction", "course plan", "courseplan",
   "cover page", "coverpage", "chapter",
+  "overview",
 ]
 
 // Keywords that veto the auto-select. Mostly answer-key / mark-scheme noise
@@ -424,7 +425,6 @@ const AUTO_DESELECT_KEYWORDS = [
   "solution", "solutions", "answer", "answers",
   "marking", "rubric", "scheme", "model answer", "suggested answer",
   "memo",
-  "overview",
 ]
 
 function autoSelectByKeyword(name) {
