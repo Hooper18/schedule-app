@@ -260,6 +260,19 @@ export default function AuthPage() {
                 : '发送重置邮件'}
         </button>
 
+        {mode === 'signin' && (
+          <p className="text-xs text-dim text-center leading-relaxed">
+            登录即表示你已阅读并同意
+            <button
+              type="button"
+              onClick={() => setShowTerms(true)}
+              className="text-accent hover:underline mx-1"
+            >
+              《使用条款》
+            </button>
+          </p>
+        )}
+
         {mode === 'forgot' && (
           <button
             type="button"
