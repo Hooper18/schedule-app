@@ -332,9 +332,13 @@ function ByCourse({
     })
   }, [noCourse])
 
-  const orderedCourses = courses.filter((c) => byCourse.has(c.id))
+  // Show every course in the semester, even with no events, so the user has
+  // a stable complete list rather than a list that shrinks/grows with DDL
+  // activity. Courses keep their original sort_order (preserved from the
+  // courses query).
+  const orderedCourses = courses
 
-  if (events.length === 0) {
+  if (events.length === 0 && orderedCourses.length === 0) {
     return <div className="py-16 text-center text-dim">没有事件</div>
   }
 
@@ -500,16 +504,22 @@ function CourseGroup({
       </div>
       {open && (
         <div className="p-3 pt-0 space-y-2 border-t border-border">
-          {events.map((e) => (
-            <EventCard
-              key={e.id}
-              event={e}
-              course={course}
-              semester={semester}
-              onToggle={onToggle}
-              onEdit={onEdit}
-            />
-          ))}
+          {events.length === 0 ? (
+            <div className="py-6 text-center text-xs text-dim">
+              暂无待办
+            </div>
+          ) : (
+            events.map((e) => (
+              <EventCard
+                key={e.id}
+                event={e}
+                course={course}
+                semester={semester}
+                onToggle={onToggle}
+                onEdit={onEdit}
+              />
+            ))
+          )}
         </div>
       )}
     </section>
