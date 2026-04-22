@@ -8,6 +8,7 @@ import {
   Settings,
   CalendarRange,
   HelpCircle,
+  LayoutGrid,
 } from 'lucide-react'
 import HelpModal from '../HelpModal'
 
@@ -22,6 +23,7 @@ const items: Array<{
 }> = [
   { to: '/', label: 'Timeline', Icon: Clock, end: true },
   { to: '/calendar', label: 'Calendar', Icon: Calendar },
+  { to: '/weekly', label: '课表', Icon: LayoutGrid },
   { to: '/courses', label: 'Courses', Icon: BookOpen },
   { to: '/academic', label: '校历', Icon: CalendarRange },
   { to: '/import', label: 'Add', Icon: Plus },

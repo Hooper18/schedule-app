@@ -11,6 +11,7 @@ import Courses from './pages/Courses'
 import CourseDetail from './pages/CourseDetail'
 import Import from './pages/Import'
 import AcademicCalendar from './pages/AcademicCalendar'
+import WeeklySchedule from './pages/WeeklySchedule'
 
 function Loading({ message }: { message?: string }) {
   return (
@@ -49,6 +50,7 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/" element={<Protected><Timeline /></Protected>} />
         <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
+        <Route path="/weekly" element={<Protected><WeeklySchedule /></Protected>} />
         <Route path="/courses" element={<Protected><Courses /></Protected>} />
         <Route path="/courses/:id" element={<Protected><CourseDetail /></Protected>} />
         <Route path="/import" element={<Protected><Import /></Protected>} />
