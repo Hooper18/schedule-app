@@ -175,7 +175,6 @@ export default function CalendarView() {
   const { semester } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
   const { events, setStatus, reload } = useEvents(semester?.id)
-  const isDesktop = useIsDesktop()
 
   const [cursor, setCursor] = useState<Date>(startOfMonth(new Date()))
   const [selected, setSelected] = useState<string>(isoOf(new Date()))
@@ -189,14 +188,6 @@ export default function CalendarView() {
     }
   }
   const [editing, setEditing] = useState<Event | null>(null)
-
-  // On mobile the month grid has no bottom detail drawer, so tapping a day
-  // jumps straight into the day view. On desktop the right panel already
-  // mirrors the selection, so just update the cursor.
-  const selectDateFromMonthCell = (iso: string) => {
-    setSelected(iso)
-    if (!isDesktop) setMode('day')
-  }
   const [layers, setLayers] = useState<Layers>({
     showEvents: true,
     showCourses: true,
@@ -359,9 +350,22 @@ export default function CalendarView() {
           scheduleByDay={scheduleByDay}
           courseMap={courseMap}
           layers={layers}
-          onSelect={selectDateFromMonthCell}
+          onSelect={setSelected}
         />
       </div>
+
+      {/* Mobile-only: minimal bottom drawer. No title / navigation / event
+          list — the month grid already communicates that. Only renders when
+          the selected day actually has classes, so empty days stay clean. */}
+      {layers.showCourses && daySchedule.length > 0 && (
+        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-3 py-2 pb-24 md:hidden">
+          <DayCourseList
+            date={selected}
+            schedule={daySchedule}
+            courseMap={courseMap}
+          />
+        </div>
+      )}
 
       </div>
       {/* Right detail panel — desktop only */}
@@ -1121,9 +1125,11 @@ function WeekView({
                       {/* Priority: name → location → code. Time is omitted
                           because the axis already shows it. The colored left
                           stripe + bg tint carry the per-course identity so
-                          the code line can be deprioritised. */}
+                          the code line can be deprioritised. `line-clamp-2`
+                          lets long names like "Engineering Physics (I)" wrap
+                          to two lines instead of being chopped off. */}
                       <div
-                        className="text-[10px] md:text-[11px] font-bold truncate leading-tight"
+                        className="text-[10px] md:text-[11px] font-bold line-clamp-2 leading-tight"
                         style={{ color: c.color }}
                       >
                         {c.name}
