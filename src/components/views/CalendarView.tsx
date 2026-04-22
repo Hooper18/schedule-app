@@ -8,6 +8,7 @@ import {
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
+import { useIsDesktop } from '../../hooks/useIsDesktop'
 import EventCard from '../shared/EventCard'
 import EventModal from '../shared/EventModal'
 import DayDetailPanel from './DayDetailPanel'
@@ -578,17 +579,17 @@ function Cell({
   return (
     <button
       onClick={() => onSelect(iso)}
-      className={`aspect-square md:aspect-auto md:h-24 rounded-lg p-1 md:p-1.5 flex flex-col items-center md:items-stretch justify-start border transition-colors ${border} ${bg} ${inMonth ? '' : 'opacity-40'} hover:bg-hover text-left`}
+      className={`h-12 md:h-24 rounded-md md:rounded-lg p-0.5 md:p-1.5 flex flex-col items-center md:items-stretch justify-start border transition-colors ${border} ${bg} ${inMonth ? '' : 'opacity-40'} hover:bg-hover text-left`}
     >
       <div className="w-full flex items-center justify-between gap-1">
         <span
-          className={`text-xs md:text-[13px] ${dateTextColor} ${dateCircleClass} md:self-start`}
+          className={`text-xs md:text-[13px] font-semibold ${dateTextColor} ${dateCircleClass} md:self-start`}
         >
           {d.getDate()}
         </span>
         {inMonth && daySessions.length > 0 && (
           <span
-            className="text-[9px] md:text-[10px] text-dim font-mono leading-none"
+            className="text-[8px] md:text-[10px] text-dim font-mono leading-none font-medium"
             title={`${daySessions.length} 节课`}
           >
             {daySessions.length}节
@@ -782,11 +783,11 @@ export function DayCourseList({
             return (
               <div
                 key={s.id}
-                className={`flex gap-3 p-3 border-b border-border last:border-b-0 ${
+                className={`flex gap-2 md:gap-3 p-2 md:p-3 border-b border-border last:border-b-0 ${
                   highlight ? 'bg-accent/5' : ''
                 }`}
               >
-                <div className="w-16 text-xs text-dim shrink-0 font-mono">
+                <div className="w-14 md:w-16 text-xs text-dim shrink-0 font-mono font-semibold">
                   <div>{s.start_time.slice(0, 5)}</div>
                   <div>{s.end_time.slice(0, 5)}</div>
                 </div>
@@ -795,10 +796,10 @@ export function DayCourseList({
                   style={{ backgroundColor: c?.color ?? '#6b7280' }}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-text truncate">
+                  <div className="text-sm font-semibold text-text truncate">
                     {c ? `${c.code} ${c.name}` : '未知课程'}
                   </div>
-                  <div className="text-xs text-dim flex items-center gap-1 flex-wrap">
+                  <div className="text-xs text-dim flex items-center gap-1 flex-wrap font-medium">
                     <span>{s.type}</span>
                     {s.location && (
                       <>
@@ -836,8 +837,6 @@ interface WeekViewProps {
   onSelectDate: (iso: string) => void
 }
 
-const HOUR_PX_WEEK = 56
-
 function WeekView({
   cursor,
   onCursorChange,
@@ -848,6 +847,11 @@ function WeekView({
   layers,
   onSelectDate,
 }: WeekViewProps) {
+  const isDesktop = useIsDesktop()
+  // Mobile packs hours tighter so the day fits in one screen with minimal
+  // vertical scroll; desktop keeps the roomier default.
+  const HOUR_PX_WEEK = isDesktop ? 56 : 40
+  const AXIS_WIDTH = isDesktop ? 56 : 36
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60 * 1000)
@@ -956,12 +960,16 @@ function WeekView({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
-        <div
-          className="grid min-w-[800px]"
-          style={{ gridTemplateColumns: '56px repeat(7, minmax(0, 1fr))' }}
-        >
-          <div className="sticky top-0 z-20 bg-main border-b border-border" />
+      {/* Mobile-only pill day strip — mimics native calendar's day picker.
+          The grid below hides its own header row on mobile so this acts as
+          the column key. Event presence is shown as a small accent dot. */}
+      <div className="md:hidden shrink-0 border-b border-border px-2 py-1.5 bg-main">
+        <div className="flex gap-1">
+          <div
+            className="shrink-0"
+            style={{ width: `${AXIS_WIDTH}px` }}
+            aria-hidden
+          />
           {weekDays.map((day) => {
             const iso = isoOf(day)
             const isToday = iso === todayIso
@@ -971,7 +979,49 @@ function WeekView({
                 key={iso}
                 type="button"
                 onClick={() => onSelectDate(iso)}
-                className={`sticky top-0 z-20 bg-main px-2 py-2 text-xs font-medium border-b border-border flex flex-col items-center gap-1 hover:bg-hover transition-colors ${
+                className={`flex-1 min-w-0 flex flex-col items-center py-1.5 rounded-xl text-xs transition-colors ${
+                  isToday
+                    ? 'bg-accent text-white'
+                    : 'text-dim hover:bg-hover'
+                }`}
+              >
+                <span className="text-[9px] leading-none font-medium">
+                  周{['日', '一', '二', '三', '四', '五', '六'][day.getDay()]}
+                </span>
+                <span className="text-sm font-bold leading-none mt-1">
+                  {day.getDate()}
+                </span>
+                {dayEvents.length > 0 && (
+                  <span
+                    className={`w-1 h-1 rounded-full mt-1 ${isToday ? 'bg-white/80' : 'bg-accent'}`}
+                  />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
+        <div
+          className="grid min-w-[560px] md:min-w-[800px]"
+          style={{
+            gridTemplateColumns: `${AXIS_WIDTH}px repeat(7, minmax(0, 1fr))`,
+          }}
+        >
+          {/* Desktop-only header row (8 cells). Hidden on mobile so the pill
+              strip above acts as the column labels instead. */}
+          <div className="hidden md:block sticky top-0 z-20 bg-main border-b border-border" />
+          {weekDays.map((day) => {
+            const iso = isoOf(day)
+            const isToday = iso === todayIso
+            const dayEvents = layers.showEvents ? eventsByDate.get(iso) ?? [] : []
+            return (
+              <button
+                key={iso}
+                type="button"
+                onClick={() => onSelectDate(iso)}
+                className={`hidden md:flex sticky top-0 z-20 bg-main px-2 py-2 text-xs font-medium border-b border-border flex-col items-center gap-1 hover:bg-hover transition-colors ${
                   isToday ? 'text-accent font-semibold' : 'text-dim'
                 }`}
               >
@@ -1013,7 +1063,7 @@ function WeekView({
             {timeLabels.map((m) => (
               <div
                 key={m}
-                className="absolute right-2 text-[10px] text-muted -translate-y-1/2 font-mono"
+                className="absolute right-1 md:right-2 text-[9px] md:text-[10px] text-muted -translate-y-1/2 font-mono font-medium"
                 style={{ top: `${((m - startMin) / 60) * HOUR_PX_WEEK}px` }}
               >
                 {String(Math.floor(m / 60)).padStart(2, '0')}:00
@@ -1070,7 +1120,7 @@ function WeekView({
                       key={s.id}
                       type="button"
                       onClick={() => onSelectDate(iso)}
-                      className={`absolute left-1 right-1 rounded-md px-1.5 py-1 text-left overflow-hidden transition-shadow ${
+                      className={`absolute left-0.5 right-0.5 md:left-1 md:right-1 rounded md:rounded-md px-1 py-0.5 md:px-1.5 md:py-1 text-left overflow-hidden transition-shadow ${
                         isNow ? 'ring-2 ring-accent shadow-md' : 'shadow-sm'
                       }`}
                       style={{
@@ -1082,13 +1132,13 @@ function WeekView({
                       title={`${c.code} ${c.name}\n${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}${s.location ? '\n' + s.location : ''}`}
                     >
                       <div
-                        className="text-[10px] font-semibold truncate leading-tight font-mono"
+                        className="text-[10px] font-bold truncate leading-tight font-mono"
                         style={{ color: c.color }}
                       >
                         {c.code}
                       </div>
-                      {height > 34 && (
-                        <div className="text-[10px] text-text truncate leading-tight">
+                      {height > 28 && (
+                        <div className="text-[9px] md:text-[10px] text-text truncate leading-tight font-semibold">
                           {s.start_time.slice(0, 5)}
                           {s.location ? ` · ${s.location}` : ''}
                         </div>

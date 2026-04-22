@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MapPin } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
+import { useIsDesktop } from '../../hooks/useIsDesktop'
 import type { Course, WeeklySchedule } from '../../lib/types'
 
 // Display labels use Monday-first; the DB column day_of_week is 0=Sun..6=Sat
@@ -40,11 +41,13 @@ function colorForCode(code: string) {
   }
 }
 
-const HOUR_PX = 64
-
 export default function WeeklyScheduleView() {
   const { semester } = useSemester()
   const { courses, schedule, loading } = useCourses(semester?.id)
+  const isDesktop = useIsDesktop()
+  // Vertical density: the desktop grid breathes; on mobile we pack hours
+  // tighter so users see more of the day without scrolling.
+  const HOUR_PX = isDesktop ? 64 : 44
 
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -129,7 +132,7 @@ export default function WeeklyScheduleView() {
     return (
       <div
         key={s.id}
-        className={`absolute left-1 right-1 rounded-lg px-2 py-1.5 overflow-hidden ${
+        className={`absolute left-1 right-1 rounded-lg px-1.5 py-1 md:px-2 md:py-1.5 overflow-hidden ${
           isNow ? 'ring-2 ring-accent shadow-md' : 'shadow-sm'
         }`}
         style={{
@@ -141,21 +144,21 @@ export default function WeeklyScheduleView() {
         title={`${c.code} ${c.name}\n${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}${s.location ? '\n' + s.location : ''}`}
       >
         <div
-          className="text-[11px] font-semibold truncate leading-tight"
+          className="text-[11px] font-bold truncate leading-tight"
           style={{ color: clr.stripe }}
         >
           {c.code}
         </div>
-        <div className="text-[11px] text-text truncate leading-tight mt-0.5">
+        <div className="text-[11px] text-text truncate leading-tight mt-0.5 font-semibold">
           {c.name}
         </div>
-        {height > 54 && (
-          <div className="text-[10px] text-dim truncate leading-tight mt-0.5">
+        {height > 42 && (
+          <div className="text-[10px] text-dim truncate leading-tight mt-0.5 font-medium">
             {s.start_time.slice(0, 5)}–{s.end_time.slice(0, 5)}
           </div>
         )}
-        {s.location && height > 72 && (
-          <div className="flex items-center gap-0.5 text-[10px] text-dim truncate leading-tight mt-0.5">
+        {s.location && height > 58 && (
+          <div className="flex items-center gap-0.5 text-[10px] text-dim truncate leading-tight mt-0.5 font-medium">
             <MapPin size={9} className="shrink-0" />
             <span className="truncate">{s.location}</span>
           </div>
@@ -188,7 +191,7 @@ export default function WeeklyScheduleView() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Mobile day picker */}
-      <div className="md:hidden px-3 py-2 border-b border-border flex gap-1 overflow-x-auto shrink-0">
+      <div className="md:hidden px-2 py-1.5 border-b border-border flex gap-1 shrink-0">
         {DAY_LABELS_SHORT.map((lbl, i) => {
           const active = mobileDay === i
           const isToday = i === todayDow
@@ -200,7 +203,7 @@ export default function WeeklyScheduleView() {
                 setMobileDay(i)
                 setMobileDayUserSet(true)
               }}
-              className={`shrink-0 flex flex-col items-center px-3 py-1.5 rounded-lg text-xs transition-colors ${
+              className={`flex-1 min-w-0 flex flex-col items-center py-1.5 rounded-xl text-xs font-semibold transition-colors ${
                 active
                   ? 'bg-accent text-white'
                   : isToday
@@ -208,8 +211,8 @@ export default function WeeklyScheduleView() {
                     : 'text-dim hover:bg-hover'
               }`}
             >
-              <span className="text-[10px] leading-none">周</span>
-              <span className="leading-none mt-0.5">{lbl}</span>
+              <span className="text-[9px] leading-none font-medium">周</span>
+              <span className="leading-none mt-0.5 font-bold">{lbl}</span>
             </button>
           )
         })}
