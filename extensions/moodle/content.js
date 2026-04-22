@@ -424,6 +424,7 @@ const AUTO_DESELECT_KEYWORDS = [
   "solution", "solutions", "answer", "answers",
   "marking", "rubric", "scheme", "model answer", "suggested answer",
   "memo",
+  "overview",
 ]
 
 function autoSelectByKeyword(name) {
