@@ -115,6 +115,22 @@ export default function AuthPage() {
           <p className="text-xs text-muted mt-1">AI 辅助课程日程管理</p>
         </div>
 
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-dim leading-relaxed space-y-2">
+          <p>
+            把分散在 AC Online、Moodle、课件里的 <span className="text-text">课程 / 作业 / 考试 DDL</span> 集中到一个时间线里，自动去重、按周月日视图查看、到期前提醒。给 XMUM 学生自用的工具。
+          </p>
+          <p>
+            配套 Chrome 扩展可一键抓取课程表与 Moodle DDL。
+            <a
+              href="/extensions.7z"
+              download
+              className="text-accent hover:underline ml-1"
+            >
+              下载扩展包 (.7z)
+            </a>
+          </p>
+        </div>
+
         {mode !== 'forgot' && (
           <div className="flex gap-2 bg-card rounded-lg p-1 border border-border">
             <button

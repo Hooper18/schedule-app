@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { User, Settings, LogOut, Wallet } from 'lucide-react'
+import { User, Settings, LogOut, Wallet, HelpCircle } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useBalance } from '../../hooks/useBalance'
 import { formatCNY, LOW_BALANCE_THRESHOLD_CNY } from '../../lib/balance'
 import TopupModal from '../TopupModal'
+import HelpModal from '../HelpModal'
 
 export default function UserMenu() {
   const { user, signOut } = useAuth()
   const { balance } = useBalance()
   const [open, setOpen] = useState(false)
   const [topupOpen, setTopupOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -77,6 +79,18 @@ export default function UserMenu() {
 
           <button
             type="button"
+            onClick={() => {
+              setOpen(false)
+              setHelpOpen(true)
+            }}
+            className="w-full px-3 py-2.5 flex items-center gap-2 text-sm text-text hover:bg-hover transition-colors"
+          >
+            <HelpCircle size={14} className="text-dim" />
+            <span>帮助 / 教程</span>
+          </button>
+
+          <button
+            type="button"
             disabled
             title="暂未开放"
             className="w-full px-3 py-2.5 flex items-center gap-2 text-sm text-muted cursor-not-allowed"
@@ -103,6 +117,7 @@ export default function UserMenu() {
       )}
 
       {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   )
 }
