@@ -1,10 +1,17 @@
-import { useState } from 'react'
-import { CalendarDays, Sparkles, Chrome, Download } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CalendarDays, Sparkles, Chrome, Download, MailCheck, Loader2 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
 import PasswordInput from '../components/PasswordInput'
 import TermsModal from '../components/TermsModal'
 
 type Mode = 'signin' | 'signup' | 'forgot'
+
+// How often we retry signInWithPassword while waiting for the user to click
+// the confirmation email on another device, and how long we keep trying before
+// giving up and asking them to log in manually.
+const POLL_INTERVAL_MS = 4000
+const POLL_TIMEOUT_MS = 10 * 60 * 1000
 
 // Stash for the invite code entered at signup; redeemed on first SIGNED_IN.
 // Lives in localStorage because signUp usually requires email confirmation,
@@ -23,6 +30,16 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  // When set, the UI switches to a "waiting for email confirmation" panel and
+  // a background poll tries to sign in until the user clicks the email link
+  // (possibly on another device).
+  const [pendingConfirmation, setPendingConfirmation] = useState<
+    { email: string; password: string } | null
+  >(null)
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+  // Latest credentials/flag, read by the async poll loop so React state stays
+  // in sync even across renders without retriggering the effect.
+  const pollRef = useRef<{ cancelled: boolean }>({ cancelled: false })
 
   const passwordMismatch =
     mode === 'signup' && confirmPassword.length > 0 && password !== confirmPassword
@@ -31,6 +48,51 @@ export default function AuthPage() {
     setMode(m)
     setErr(null)
     setMsg(null)
+  }
+
+  // Poll signInWithPassword while we're waiting for email confirmation. Once
+  // the user clicks the link on any device, the email is marked confirmed and
+  // the next poll succeeds — onAuthStateChange then navigates away from /auth.
+  useEffect(() => {
+    if (!pendingConfirmation) return
+    pollRef.current = { cancelled: false }
+    const ref = pollRef.current
+    const startedAt = Date.now()
+    let timerId: number | undefined
+
+    const tick = async () => {
+      if (ref.cancelled) return
+      if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+        setPollTimedOut(true)
+        return
+      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email: pendingConfirmation.email,
+        password: pendingConfirmation.password,
+      })
+      if (ref.cancelled) return
+      if (!error) {
+        // Success — AuthContext's onAuthStateChange fires SIGNED_IN, which
+        // flips AppRoutes away from /auth. No explicit navigate needed.
+        return
+      }
+      timerId = window.setTimeout(tick, POLL_INTERVAL_MS)
+    }
+
+    timerId = window.setTimeout(tick, POLL_INTERVAL_MS)
+
+    return () => {
+      ref.cancelled = true
+      if (timerId !== undefined) window.clearTimeout(timerId)
+    }
+  }, [pendingConfirmation])
+
+  const cancelPendingConfirmation = () => {
+    setPendingConfirmation(null)
+    setPollTimedOut(false)
+    setMode('signin')
+    setPassword('')
+    setConfirmPassword('')
   }
 
   const submit = async (e: React.FormEvent) => {
@@ -94,9 +156,10 @@ export default function AuthPage() {
             : error.message,
         )
       } else {
-        setMsg('注册邮件已发送，请查收邮箱确认。')
-        setPassword('')
-        setConfirmPassword('')
+        // Hold credentials in component state (not persisted) so the poll
+        // below can sign in automatically the moment the email is confirmed
+        // — even if the user clicks the link on a different device.
+        setPendingConfirmation({ email, password })
       }
     }
   }
@@ -172,6 +235,55 @@ export default function AuthPage() {
 
       {/* Form panel */}
       <div className="flex items-center justify-center px-6 py-10 md:py-12">
+        {pendingConfirmation ? (
+          <div className="w-full max-w-sm md:bg-card md:border md:border-border md:rounded-2xl md:shadow-sm md:p-8 space-y-5">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-14 h-14 rounded-full bg-accent/15 border border-accent/30 flex items-center justify-center">
+                <MailCheck className="text-accent" size={26} />
+              </div>
+              <h2 className="text-lg font-semibold">等待邮箱确认</h2>
+              <p className="text-xs text-dim leading-relaxed">
+                确认邮件已发送至
+                <span className="block mt-1 text-text break-all font-medium">
+                  {pendingConfirmation.email}
+                </span>
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-border bg-card px-4 py-3 text-xs text-dim leading-relaxed space-y-1.5">
+              <p>
+                请查收邮箱并点击确认链接，
+                <span className="text-text">确认后本页面会自动登录</span>
+                ，无需返回此处输入密码。
+              </p>
+              <p>支持在任意设备点击（包括手机）。</p>
+            </div>
+
+            {!pollTimedOut ? (
+              <div className="flex items-center justify-center gap-2 text-xs text-dim">
+                <Loader2 size={14} className="animate-spin" />
+                正在等待确认…
+              </div>
+            ) : (
+              <div className="text-xs text-red-500 text-center leading-relaxed">
+                等待超时。如已确认，请手动返回登录。
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={cancelPendingConfirmation}
+                className="w-full py-2.5 rounded-lg border border-border text-sm text-text hover:bg-hover transition-colors"
+              >
+                返回登录
+              </button>
+              <p className="text-[10px] text-muted text-center leading-relaxed">
+                没收到邮件？检查垃圾邮件箱，或返回登录后用「忘记密码」重新触发验证。
+              </p>
+            </div>
+          </div>
+        ) : (
         <form
           onSubmit={submit}
           className="w-full max-w-sm space-y-4 md:bg-card md:border md:border-border md:rounded-2xl md:shadow-sm md:p-8"
@@ -359,6 +471,7 @@ export default function AuthPage() {
           </button>
         )}
         </form>
+        )}
       </div>
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
