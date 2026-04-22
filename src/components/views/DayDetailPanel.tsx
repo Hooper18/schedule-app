@@ -28,6 +28,14 @@ function toMin(hhmm: string) {
   return (h || 0) * 60 + (m || 0)
 }
 
+function formatDuration(mins: number): string {
+  if (mins < 1) return '不到 1 分钟'
+  if (mins < 60) return `${mins} 分钟`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分钟`
+}
+
 // Desktop-only right rail: selected-day events → selected-day classes →
 // upcoming events list.
 export default function DayDetailPanel({
@@ -75,24 +83,36 @@ export default function DayDetailPanel({
   const daySchedule = scheduleByDay.get(d.getDay()) ?? []
   const isToday = selectedDate === isoOf(new Date())
 
-  // Current / next session (today only). "Next" = first session after now
-  // that hasn't started; "current" = nowMin falls inside [start, end).
-  const { nextSession, currentSession } = useMemo(() => {
-    if (!isToday) return { nextSession: null, currentSession: null }
+  // Current / next session (today only). "Current" = nowMin is inside
+  // [start, end). "Next" = the session that starts *after* whatever's
+  // current (or after now if nothing is current). `minsRemaining` /
+  // `minsUntil` live on this struct so the UI can show countdowns.
+  const { currentSession, nextSession, minsRemaining, minsUntil } = useMemo(() => {
+    if (!isToday) {
+      return {
+        currentSession: null,
+        nextSession: null,
+        minsRemaining: 0,
+        minsUntil: 0,
+      }
+    }
     const now = new Date()
     const nowMin = now.getHours() * 60 + now.getMinutes()
     const cur =
       daySchedule.find(
         (s) => nowMin >= toMin(s.start_time) && nowMin < toMin(s.end_time),
       ) ?? null
-    const nxt = daySchedule.find((s) => toMin(s.start_time) > nowMin) ?? null
-    return { nextSession: nxt, currentSession: cur }
+    const afterMin = cur ? toMin(cur.end_time) : nowMin
+    const nxt = daySchedule.find((s) => toMin(s.start_time) >= afterMin) ?? null
+    return {
+      currentSession: cur,
+      nextSession: nxt,
+      minsRemaining: cur ? toMin(cur.end_time) - nowMin : 0,
+      minsUntil: nxt ? toMin(nxt.start_time) - nowMin : 0,
+    }
   }, [isToday, daySchedule])
 
   const highlightSession = currentSession ?? nextSession
-  const highlightCourse = highlightSession
-    ? courseMap[highlightSession.course_id]
-    : null
 
   return (
     <aside className="hidden md:flex md:flex-col md:w-64 md:border-l md:border-border md:bg-card/40">
@@ -136,25 +156,30 @@ export default function DayDetailPanel({
               <h3 className="text-xs font-semibold tracking-wider text-muted uppercase">
                 今日课程
               </h3>
-              {isToday && highlightSession && highlightCourse && (
-                <div className="rounded-lg border border-accent/40 bg-accent/10 p-2.5">
-                  <div className="text-[10px] font-semibold text-accent uppercase tracking-wider">
-                    {currentSession ? '正在上课' : '下一节'}
-                  </div>
-                  <div className="text-sm text-text mt-0.5 break-words">
-                    <span className="font-semibold font-mono">
-                      {highlightCourse.code}
-                    </span>{' '}
-                    <span className="text-dim">·</span>{' '}
-                    {highlightSession.start_time.slice(0, 5)}
-                    {highlightSession.location && (
-                      <>
-                        {' '}
-                        <span className="text-dim">·</span>{' '}
-                        {highlightSession.location}
-                      </>
-                    )}
-                  </div>
+              {isToday && (
+                <div className="space-y-2">
+                  <CurrentClassCard
+                    session={currentSession}
+                    course={
+                      currentSession ? courseMap[currentSession.course_id] : null
+                    }
+                    minsRemaining={minsRemaining}
+                  />
+                  {nextSession ? (
+                    <NextClassCard
+                      session={nextSession}
+                      course={courseMap[nextSession.course_id] ?? null}
+                      minsUntil={minsUntil}
+                    />
+                  ) : currentSession ? (
+                    <div className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[11px] text-dim">
+                      这是今天最后一节课
+                    </div>
+                  ) : daySchedule.length > 0 ? (
+                    <div className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[11px] text-dim">
+                      今日课程已结束
+                    </div>
+                  ) : null}
                 </div>
               )}
               {daySchedule.length === 0 ? (
@@ -247,6 +272,100 @@ export default function DayDetailPanel({
         </section>
       </div>
     </aside>
+  )
+}
+
+function CurrentClassCard({
+  session,
+  course,
+  minsRemaining,
+}: {
+  session: WeeklySchedule | null
+  course: Course | null
+  minsRemaining: number
+}) {
+  // Always render so "currently in class" stays a stable slot users can scan;
+  // when nothing is in progress we show an idle state instead of hiding.
+  if (!session || !course) {
+    return (
+      <div className="rounded-lg border border-border bg-card/60 px-3 py-2.5">
+        <div className="text-[10px] font-semibold text-dim uppercase tracking-wider">
+          正在上课
+        </div>
+        <div className="text-xs text-dim mt-1">当前无课程进行中</div>
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-lg border-2 border-accent bg-accent/15 px-3 py-2.5 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold text-accent uppercase tracking-wider">
+          ● 正在上课
+        </div>
+        <div className="text-[10px] text-accent font-medium">
+          还剩 {formatDuration(minsRemaining)}
+        </div>
+      </div>
+      <div className="text-sm font-semibold text-text font-mono">
+        {course.code}
+      </div>
+      <div className="text-xs text-text break-words leading-snug">
+        {course.name}
+      </div>
+      <div className="text-[11px] text-dim flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="font-mono">
+          {session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}
+        </span>
+        {session.location && (
+          <span className="inline-flex items-center gap-0.5">
+            <MapPin size={10} className="shrink-0" /> {session.location}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function NextClassCard({
+  session,
+  course,
+  minsUntil,
+}: {
+  session: WeeklySchedule
+  course: Course | null
+  minsUntil: number
+}) {
+  return (
+    <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold text-accent/80 uppercase tracking-wider">
+          下一节课
+        </div>
+        <div className="text-[10px] text-accent/80 font-medium">
+          {minsUntil <= 0
+            ? '即将开始'
+            : `${formatDuration(minsUntil)}后`}
+        </div>
+      </div>
+      <div className="text-sm font-semibold text-text font-mono">
+        {course?.code ?? '未知课程'}
+      </div>
+      {course && (
+        <div className="text-xs text-text break-words leading-snug">
+          {course.name}
+        </div>
+      )}
+      <div className="text-[11px] text-dim flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="font-mono">
+          {session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}
+        </span>
+        {session.location && (
+          <span className="inline-flex items-center gap-0.5">
+            <MapPin size={10} className="shrink-0" /> {session.location}
+          </span>
+        )}
+      </div>
+    </div>
   )
 }
 
