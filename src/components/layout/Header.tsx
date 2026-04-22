@@ -2,6 +2,7 @@ import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import ThemeToggle from './ThemeToggle'
 import UserMenu from './UserMenu'
+import HelpButton from './HelpButton'
 
 interface Props {
   title: string
@@ -36,6 +37,9 @@ export default function Header({ title, right, showBack, onBack }: Props) {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {right}
+          <div className="md:hidden">
+            <HelpButton />
+          </div>
           <ThemeToggle />
           <UserMenu />
         </div>
