@@ -56,7 +56,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password })
+    // emailRedirectTo overrides whatever Site URL is set in the Supabase
+    // dashboard, so the confirmation link always returns to this origin with
+    // the access token in the URL hash — detectSessionInUrl then signs the
+    // user in automatically on the landing page.
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/`,
+      },
+    })
     return { error }
   }
 
