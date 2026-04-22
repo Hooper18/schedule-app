@@ -28,6 +28,21 @@ const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 const MODE_LABELS: Record<Mode, string> = { month: '月', week: '周', day: '日' }
 
+// Persist the last-used view mode so re-opening the calendar lands on the
+// same surface (e.g. a user who lives in week view doesn't have to switch
+// back from month every time).
+const MODE_STORAGE_KEY = 'calendar-view-mode'
+function loadStoredMode(): Mode {
+  if (typeof window === 'undefined') return 'month'
+  try {
+    const v = window.localStorage.getItem(MODE_STORAGE_KEY)
+    if (v === 'month' || v === 'week' || v === 'day') return v
+  } catch {
+    // localStorage can throw in private mode / disabled cookies; fall through.
+  }
+  return 'month'
+}
+
 interface Layers {
   showEvents: boolean
   showCourses: boolean
@@ -163,7 +178,15 @@ export default function CalendarView() {
 
   const [cursor, setCursor] = useState<Date>(startOfMonth(new Date()))
   const [selected, setSelected] = useState<string>(isoOf(new Date()))
-  const [mode, setMode] = useState<Mode>('month')
+  const [mode, setModeState] = useState<Mode>(() => loadStoredMode())
+  const setMode = (m: Mode) => {
+    setModeState(m)
+    try {
+      window.localStorage.setItem(MODE_STORAGE_KEY, m)
+    } catch {
+      // persist is best-effort; ignore quota / private-mode failures.
+    }
+  }
   const [editing, setEditing] = useState<Event | null>(null)
   const [layers, setLayers] = useState<Layers>({
     showEvents: true,
@@ -978,16 +1001,18 @@ function WeekView({
         </button>
       </div>
 
-      {/* Mobile-only pill day strip — mimics native calendar's day picker.
-          The grid below hides its own header row on mobile so this acts as
-          the column key. Event presence is shown as a small accent dot. */}
-      <div className="md:hidden shrink-0 border-b border-border px-2 py-1.5 bg-main">
-        <div className="flex gap-1">
-          <div
-            className="shrink-0"
-            style={{ width: `${AXIS_WIDTH}px` }}
-            aria-hidden
-          />
+      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
+        {/* Mobile pill day strip — lives *inside* the same scroll container
+            as the grid so they pan together, and uses the same grid column
+            template so each pill's center aligns exactly with its column
+            below. Hidden on desktop (the grid's inline header takes over). */}
+        <div
+          className="md:hidden sticky top-0 z-30 bg-main border-b border-border px-1 py-1.5 grid md:min-w-[800px]"
+          style={{
+            gridTemplateColumns: `${AXIS_WIDTH}px repeat(7, minmax(0, 1fr))`,
+          }}
+        >
+          <div aria-hidden />
           {weekDays.map((day) => {
             const iso = isoOf(day)
             const isToday = iso === todayIso
@@ -997,32 +1022,34 @@ function WeekView({
                 key={iso}
                 type="button"
                 onClick={() => onSelectDate(iso)}
-                className={`flex-1 min-w-0 flex flex-col items-center py-1.5 rounded-xl text-xs transition-colors ${
-                  isToday
-                    ? 'bg-accent text-white'
-                    : 'text-dim hover:bg-hover'
-                }`}
+                className="mx-0.5 flex flex-col items-center py-1 rounded-xl text-xs transition-colors hover:bg-hover"
               >
-                <span className="text-[9px] leading-none font-medium">
+                <span
+                  className={`text-[9px] leading-none font-medium ${
+                    isToday ? 'text-accent' : 'text-dim'
+                  }`}
+                >
                   周{['日', '一', '二', '三', '四', '五', '六'][day.getDay()]}
                 </span>
-                <span className="text-sm font-bold leading-none mt-1">
+                <span
+                  className={`mt-1 w-7 h-7 flex items-center justify-center rounded-full text-sm font-bold leading-none ${
+                    isToday ? 'bg-accent text-white' : 'text-text'
+                  }`}
+                >
                   {day.getDate()}
                 </span>
                 {dayEvents.length > 0 && (
                   <span
-                    className={`w-1 h-1 rounded-full mt-1 ${isToday ? 'bg-white/80' : 'bg-accent'}`}
+                    className={`w-1 h-1 rounded-full mt-1 ${isToday ? 'bg-accent' : 'bg-accent/60'}`}
                   />
                 )}
               </button>
             )
           })}
         </div>
-      </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
         <div
-          className="grid min-w-[560px] md:min-w-[800px]"
+          className="grid md:min-w-[800px]"
           style={{
             gridTemplateColumns: `${AXIS_WIDTH}px repeat(7, minmax(0, 1fr))`,
           }}
@@ -1149,16 +1176,24 @@ function WeekView({
                       }}
                       title={`${c.code} ${c.name}\n${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}${s.location ? '\n' + s.location : ''}`}
                     >
+                      {/* Priority: name → location → code. Time is omitted
+                          because the axis already shows it. The colored left
+                          stripe + bg tint carry the per-course identity so
+                          the code line can be deprioritised. */}
                       <div
-                        className="text-[10px] font-bold truncate leading-tight font-mono"
+                        className="text-[10px] md:text-[11px] font-bold truncate leading-tight"
                         style={{ color: c.color }}
                       >
-                        {c.code}
+                        {c.name}
                       </div>
-                      {height > 28 && (
+                      {s.location && height > 24 && (
                         <div className="text-[9px] md:text-[10px] text-text truncate leading-tight font-semibold">
-                          {s.start_time.slice(0, 5)}
-                          {s.location ? ` · ${s.location}` : ''}
+                          {s.location}
+                        </div>
+                      )}
+                      {height > 52 && (
+                        <div className="text-[9px] text-dim truncate leading-tight font-mono font-medium mt-0.5">
+                          {c.code}
                         </div>
                       )}
                     </button>
