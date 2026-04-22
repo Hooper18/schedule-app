@@ -1,12 +1,24 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Link2 } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
 import EventCard from '../shared/EventCard'
 import EventModal from '../shared/EventModal'
 import FilterBar from '../shared/FilterBar'
+import ReassignCourseModal from '../ReassignCourseModal'
 import type { Course, Event, EventType } from '../../lib/types'
+
+// Matches course codes like COM104, BSC124, MPU3312, ECS301A.
+const COURSE_CODE_RE = /\b[A-Z]{2,4}\d{3,}[A-Z]?\b/
+
+function extractCourseCode(e: Event): string | null {
+  const m =
+    e.title.match(COURSE_CODE_RE) ||
+    (e.notes ? e.notes.match(COURSE_CODE_RE) : null) ||
+    (e.source_file ? e.source_file.match(COURSE_CODE_RE) : null)
+  return m ? m[0] : null
+}
 
 type Filter = 'all' | EventType | 'ddl_group'
 type GroupMode = 'time' | 'course'
@@ -29,6 +41,10 @@ export default function TimelineView() {
   const [showDone, setShowDone] = useState(false)
   const [editing, setEditing] = useState<Event | null>(null)
   const [groupMode, setGroupMode] = useState<GroupMode>('time')
+  const [reassign, setReassign] = useState<{
+    eventIds: string[]
+    hintCode: string | null
+  } | null>(null)
 
   const courseMap = useMemo(
     () => Object.fromEntries(courses.map((c) => [c.id, c])),
@@ -132,6 +148,9 @@ export default function TimelineView() {
             semester={semester}
             onToggle={setStatus}
             onEdit={setEditing}
+            onReassign={(eventIds, hintCode) =>
+              setReassign({ eventIds, hintCode })
+            }
           />
         )}
       </div>
@@ -141,6 +160,15 @@ export default function TimelineView() {
         courses={courses}
         onClose={() => setEditing(null)}
         onSaved={reload}
+      />
+
+      <ReassignCourseModal
+        open={!!reassign}
+        onClose={() => setReassign(null)}
+        courses={courses}
+        eventIds={reassign?.eventIds ?? []}
+        hintCode={reassign?.hintCode ?? null}
+        onDone={reload}
       />
     </>
   )
@@ -210,35 +238,63 @@ interface ByCourseProps {
   semester: NonNullable<ReturnType<typeof useSemester>['semester']>
   onToggle: (id: string, status: 'pending' | 'completed') => void
   onEdit: (e: Event) => void
+  onReassign: (eventIds: string[], hintCode: string | null) => void
 }
 
-function ByCourse({ events, courses, semester, onToggle, onEdit }: ByCourseProps) {
+function ByCourse({
+  events,
+  courses,
+  semester,
+  onToggle,
+  onEdit,
+  onReassign,
+}: ByCourseProps) {
   // Group by course_id; sort within each group by date (tbd last), and courses
   // by their original sort_order (preserved from the courses query).
-  const groups = useMemo(() => {
-    const m = new Map<string, Event[]>()
+  const { byCourse, noCourse } = useMemo(() => {
+    const byCourse = new Map<string, Event[]>()
+    const noCourse: Event[] = []
     for (const e of events) {
-      const key = e.course_id ?? '__no_course__'
-      const arr = m.get(key) ?? []
-      arr.push(e)
-      m.set(key, arr)
+      if (e.course_id) {
+        const arr = byCourse.get(e.course_id) ?? []
+        arr.push(e)
+        byCourse.set(e.course_id, arr)
+      } else {
+        noCourse.push(e)
+      }
     }
-    for (const arr of m.values()) {
+    const sortByDate = (arr: Event[]) =>
       arr.sort((a, b) => {
         if (a.date && b.date) return a.date.localeCompare(b.date)
         if (a.date) return -1
         if (b.date) return 1
         return 0
       })
-    }
-    return m
+    for (const arr of byCourse.values()) sortByDate(arr)
+    sortByDate(noCourse)
+    return { byCourse, noCourse }
   }, [events])
 
-  const orderedCourses = [
-    ...courses.filter((c) => groups.has(c.id)),
-    // Events without a course come last in their own group.
-  ]
-  const noCourseEvents = groups.get('__no_course__') ?? []
+  // Subgroup the "no course" bucket by a course code extracted from
+  // title/notes/source_file. Lets the user reassign all BSC124 events at
+  // once, which is the usual case when Moodle/AC codes don't match.
+  const noCourseSubgroups = useMemo(() => {
+    const m = new Map<string, Event[]>()
+    for (const e of noCourse) {
+      const code = extractCourseCode(e) ?? '__unknown__'
+      const arr = m.get(code) ?? []
+      arr.push(e)
+      m.set(code, arr)
+    }
+    // Sort: known codes alphabetically, unknown last.
+    return Array.from(m.entries()).sort(([a], [b]) => {
+      if (a === '__unknown__') return 1
+      if (b === '__unknown__') return -1
+      return a.localeCompare(b)
+    })
+  }, [noCourse])
+
+  const orderedCourses = courses.filter((c) => byCourse.has(c.id))
 
   if (events.length === 0) {
     return <div className="py-16 text-center text-dim">没有事件</div>
@@ -246,74 +302,161 @@ function ByCourse({ events, courses, semester, onToggle, onEdit }: ByCourseProps
 
   return (
     <div className="space-y-2">
-      {orderedCourses.map((c) => (
-        <CourseGroup
-          key={c.id}
-          course={c}
-          events={groups.get(c.id) ?? []}
-          semester={semester}
-          onToggle={onToggle}
-          onEdit={onEdit}
-        />
-      ))}
-      {noCourseEvents.length > 0 && (
-        <CourseGroup
-          course={null}
-          events={noCourseEvents}
-          semester={semester}
-          onToggle={onToggle}
-          onEdit={onEdit}
-        />
+      {orderedCourses.map((c) => {
+        const evs = byCourse.get(c.id) ?? []
+        return (
+          <CourseGroup
+            key={c.id}
+            title={`${c.code} · ${c.name}`}
+            color={c.color}
+            events={evs}
+            course={c}
+            semester={semester}
+            onToggle={onToggle}
+            onEdit={onEdit}
+            onReassign={() =>
+              onReassign(
+                evs.map((e) => e.id),
+                c.code,
+              )
+            }
+          />
+        )
+      })}
+
+      {noCourse.length > 0 && (
+        <section className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-3 px-3 py-2.5 border-b border-border">
+            <span
+              className="w-1 h-5 rounded-full shrink-0"
+              style={{ backgroundColor: '#6b7280' }}
+              aria-hidden
+            />
+            <span className="flex-1 min-w-0 text-sm font-medium text-text truncate">
+              其他（无课程）
+            </span>
+            <span className="shrink-0 text-xs text-dim">
+              {noCourse.length} 条
+            </span>
+          </div>
+          <div className="p-3 space-y-3">
+            {noCourseSubgroups.map(([code, evs]) => {
+              const hint = code === '__unknown__' ? null : code
+              const label =
+                code === '__unknown__' ? '课程代码未识别' : code
+              return (
+                <div
+                  key={code}
+                  className="rounded-lg border border-border bg-main overflow-hidden"
+                >
+                  <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+                    <span className="flex-1 min-w-0 text-xs font-mono font-semibold text-text truncate">
+                      {label}
+                    </span>
+                    <span className="text-[11px] text-dim shrink-0">
+                      {evs.length} 条
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onReassign(
+                          evs.map((e) => e.id),
+                          hint,
+                        )
+                      }
+                      className="shrink-0 inline-flex items-center gap-1 text-xs text-accent hover:bg-accent/10 rounded-md px-2 py-1 transition-colors"
+                    >
+                      <Link2 size={12} />
+                      关联到课程
+                    </button>
+                  </div>
+                  <div className="p-2 space-y-2">
+                    {evs.map((e) => (
+                      <EventCard
+                        key={e.id}
+                        event={e}
+                        semester={semester}
+                        onToggle={onToggle}
+                        onEdit={onEdit}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
       )}
     </div>
   )
 }
 
 interface CourseGroupProps {
-  course: Course | null
+  title: string
+  color: string
+  course: Course
   events: Event[]
   semester: NonNullable<ReturnType<typeof useSemester>['semester']>
   onToggle: (id: string, status: 'pending' | 'completed') => void
   onEdit: (e: Event) => void
+  onReassign: () => void
 }
 
-function CourseGroup({ course, events, semester, onToggle, onEdit }: CourseGroupProps) {
+function CourseGroup({
+  title,
+  color,
+  course,
+  events,
+  semester,
+  onToggle,
+  onEdit,
+  onReassign,
+}: CourseGroupProps) {
   const [open, setOpen] = useState(true)
-  const label = course ? `${course.code} · ${course.name}` : '其他（无课程）'
-  const color = course?.color ?? '#6b7280'
   const pending = events.filter((e) => e.status !== 'completed').length
 
   return (
     <section className="rounded-xl border border-border bg-card overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-hover transition-colors"
-      >
-        {open ? (
-          <ChevronDown size={14} className="text-dim shrink-0" />
-        ) : (
-          <ChevronRight size={14} className="text-dim shrink-0" />
-        )}
-        <span
-          className="w-1 h-5 rounded-full shrink-0"
-          style={{ backgroundColor: color }}
-          aria-hidden
-        />
-        <span className="flex-1 min-w-0 text-left text-sm font-medium text-text truncate">
-          {label}
-        </span>
-        <span className="shrink-0 text-xs text-dim">
-          {pending > 0 ? `${pending} 待办` : '全部完成'} · {events.length}
-        </span>
-      </button>
+      <div className="w-full flex items-center gap-3 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex-1 min-w-0 flex items-center gap-3 text-left hover:opacity-80 transition-opacity"
+        >
+          {open ? (
+            <ChevronDown size={14} className="text-dim shrink-0" />
+          ) : (
+            <ChevronRight size={14} className="text-dim shrink-0" />
+          )}
+          <span
+            className="w-1 h-5 rounded-full shrink-0"
+            style={{ backgroundColor: color }}
+            aria-hidden
+          />
+          <span className="flex-1 min-w-0 text-sm font-medium text-text truncate">
+            {title}
+          </span>
+          <span className="shrink-0 text-xs text-dim">
+            {pending > 0 ? `${pending} 待办` : '全部完成'} · {events.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onReassign}
+          className="shrink-0 p-1.5 rounded-md text-dim hover:text-accent hover:bg-accent/10 transition-colors"
+          title="批量关联到其他课程"
+          aria-label="批量关联到其他课程"
+        >
+          <Link2 size={14} />
+        </button>
+      </div>
       {open && (
         <div className="p-3 pt-0 space-y-2 border-t border-border">
           {events.map((e) => (
             <EventCard
               key={e.id}
               event={e}
-              course={course ?? undefined}
+              course={course}
               semester={semester}
               onToggle={onToggle}
               onEdit={onEdit}
