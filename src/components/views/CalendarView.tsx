@@ -1,8 +1,9 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  MapPin,
 } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
@@ -25,6 +26,11 @@ type Mode = 'month' | 'week' | 'day'
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
 const MODE_LABELS: Record<Mode, string> = { month: '月', week: '周', day: '日' }
+
+interface Layers {
+  showEvents: boolean
+  showCourses: boolean
+}
 
 // Shared pill switcher rendered in both the desktop month header and the
 // mobile sub-header row. Keeps visual language identical across breakpoints.
@@ -55,9 +61,42 @@ function ViewSwitcher({
   )
 }
 
+// Dual-state layer toggles — each independently controls whether events /
+// weekly courses appear in the calendar grid.
+function LayerToggle({
+  layers,
+  onChange,
+}: {
+  layers: Layers
+  onChange: (l: Layers) => void
+}) {
+  const base =
+    'px-3 py-1 rounded-full text-xs font-medium border transition-colors'
+  const active = 'bg-accent/15 text-accent border-accent/40'
+  const inactive = 'bg-card text-dim border-border hover:text-text'
+  return (
+    <div className="inline-flex gap-1.5">
+      <button
+        type="button"
+        onClick={() => onChange({ ...layers, showEvents: !layers.showEvents })}
+        className={`${base} ${layers.showEvents ? active : inactive}`}
+      >
+        事件
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({ ...layers, showCourses: !layers.showCourses })
+        }
+        className={`${base} ${layers.showCourses ? active : inactive}`}
+      >
+        课程
+      </button>
+    </div>
+  )
+}
+
 // Desktop pill palette — soft light bg + dark text, with dark-mode variants.
-// Distinct from the existing solid-color badge classes (typeColor) so we can
-// keep the month grid visually calm while still telling types apart.
 function eventPillClass(type: EventType): string {
   switch (type) {
     case 'exam':
@@ -79,6 +118,43 @@ function eventPillClass(type: EventType): string {
   }
 }
 
+// Map day_of_week (0=Sun..6=Sat) → WeeklySchedule[] for O(1) cell lookups.
+function scheduleByDow(schedule: WeeklySchedule[]) {
+  const m = new Map<number, WeeklySchedule[]>()
+  for (const s of schedule) {
+    const arr = m.get(s.day_of_week) ?? []
+    arr.push(s)
+    m.set(s.day_of_week, arr)
+  }
+  for (const arr of m.values()) {
+    arr.sort((a, b) => a.start_time.localeCompare(b.start_time))
+  }
+  return m
+}
+
+function toMin(hhmm: string) {
+  const [h, m] = hhmm.split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+// Find the next-up / currently-in-progress session for a given date+clock.
+// Used to highlight "下一节课" in the day view and sidebar panel.
+function findNextSession(
+  date: string,
+  schedule: WeeklySchedule[],
+): WeeklySchedule | null {
+  const now = new Date()
+  const today = isoOf(now)
+  if (date !== today) return null
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  // Prefer in-progress session; otherwise the first start_time > nowMin.
+  const inProgress = schedule.find(
+    (s) => nowMin >= toMin(s.start_time) && nowMin < toMin(s.end_time),
+  )
+  if (inProgress) return inProgress
+  return schedule.find((s) => toMin(s.start_time) > nowMin) ?? null
+}
+
 export default function CalendarView() {
   const { semester } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
@@ -88,6 +164,11 @@ export default function CalendarView() {
   const [selected, setSelected] = useState<string>(isoOf(new Date()))
   const [mode, setMode] = useState<Mode>('month')
   const [editing, setEditing] = useState<Event | null>(null)
+  const [layers, setLayers] = useState<Layers>({
+    showEvents: true,
+    showCourses: true,
+  })
+  const [weekCursor, setWeekCursor] = useState<Date>(new Date())
 
   const courseMap = useMemo(
     () => Object.fromEntries(courses.map((c) => [c.id, c])),
@@ -105,14 +186,13 @@ export default function CalendarView() {
     return m
   }, [events])
 
+  const scheduleByDay = useMemo(() => scheduleByDow(schedule), [schedule])
+
   const grid = useMemo(() => buildMonthGrid(cursor), [cursor])
 
   const selectedEvents = eventsByDate.get(selected) ?? []
   const selectedDayOfWeek = parseDate(selected).getDay()
-  const daySchedule = schedule
-    .filter((s) => s.day_of_week === selectedDayOfWeek)
-    .slice()
-    .sort((a, b) => a.start_time.localeCompare(b.start_time))
+  const daySchedule = scheduleByDay.get(selectedDayOfWeek) ?? []
 
   if (!semester) {
     return (
@@ -128,13 +208,15 @@ export default function CalendarView() {
     const today = new Date()
     setCursor(startOfMonth(today))
     setSelected(isoOf(today))
+    setWeekCursor(today)
   }
 
   if (mode === 'day') {
     return (
       <div className="h-full overflow-y-auto no-scrollbar">
-        <div className="p-3 border-b border-border flex items-center justify-center">
+        <div className="p-3 border-b border-border flex flex-col md:flex-row items-center justify-center gap-2">
           <ViewSwitcher mode={mode} onChange={setMode} />
+          <LayerToggle layers={layers} onChange={setLayers} />
         </div>
         <DayView
           date={selected}
@@ -142,6 +224,7 @@ export default function CalendarView() {
           courseMap={courseMap}
           semester={semester}
           schedule={daySchedule}
+          layers={layers}
           onToggle={setStatus}
           onEdit={setEditing}
           onPrevDay={() => setSelected((iso) => shiftDate(iso, -1))}
@@ -161,12 +244,29 @@ export default function CalendarView() {
   if (mode === 'week') {
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="p-3 border-b border-border flex items-center justify-center">
+        <div className="p-3 border-b border-border flex flex-col md:flex-row items-center justify-center gap-2 shrink-0">
           <ViewSwitcher mode={mode} onChange={setMode} />
+          <LayerToggle layers={layers} onChange={setLayers} />
         </div>
-        <div className="flex-1 flex items-center justify-center text-dim text-sm">
-          周视图开发中
-        </div>
+        <WeekView
+          cursor={weekCursor}
+          onCursorChange={setWeekCursor}
+          courseMap={courseMap}
+          scheduleByDay={scheduleByDay}
+          eventsByDate={eventsByDate}
+          semester={semester}
+          layers={layers}
+          onSelectDate={(iso) => {
+            setSelected(iso)
+            setMode('day')
+          }}
+        />
+        <EventModal
+          event={editing}
+          courses={courses}
+          onClose={() => setEditing(null)}
+          onSaved={reload}
+        />
       </div>
     )
   }
@@ -198,8 +298,9 @@ export default function CalendarView() {
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <div className="hidden md:block">
+            <div className="hidden md:flex items-center gap-2">
               <ViewSwitcher mode={mode} onChange={setMode} />
+              <LayerToggle layers={layers} onChange={setLayers} />
             </div>
             <button
               type="button"
@@ -210,10 +311,10 @@ export default function CalendarView() {
             </button>
           </div>
         </div>
-        {/* Mobile-only view switcher below the title row. Desktop shows it
-            inline with the month controls above. */}
-        <div className="md:hidden px-4 pb-3 flex justify-center">
+        {/* Mobile-only switcher + layer toggles below the title row. */}
+        <div className="md:hidden px-4 pb-3 flex flex-col items-center gap-2">
           <ViewSwitcher mode={mode} onChange={setMode} />
+          <LayerToggle layers={layers} onChange={setLayers} />
         </div>
         <MonthGrid
           grid={grid}
@@ -221,45 +322,53 @@ export default function CalendarView() {
           selected={selected}
           semester={semester}
           eventsByDate={eventsByDate}
+          scheduleByDay={scheduleByDay}
           courseMap={courseMap}
+          layers={layers}
           onSelect={setSelected}
         />
       </div>
 
-      {/* Events for selected day — scrolls independently, no visible
-          scrollbar. Hidden on desktop; DayDetailPanel on the right handles
-          the same content there. */}
-      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-3 pb-24 md:hidden">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-semibold text-text">
-              {formatSelectedLabel(selected)}
-            </div>
-            <div className="text-xs text-dim">
-              {selectedEvents.length === 0
-                ? '无事件'
-                : `${selectedEvents.length} 条事件`}
-            </div>
+      {/* Mobile: selected-day event + course list */}
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-4 pb-24 md:hidden">
+        <div>
+          <div className="text-sm font-semibold text-text">
+            {formatSelectedLabel(selected)}
+          </div>
+          <div className="text-xs text-dim">
+            {selectedEvents.length === 0
+              ? '无事件'
+              : `${selectedEvents.length} 条事件`}
           </div>
         </div>
 
-        {selectedEvents.length === 0 ? (
-          <div className="text-sm text-dim py-8 text-center bg-card rounded-xl border border-border">
-            无事件
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {selectedEvents.map((e) => (
-              <EventCard
-                key={e.id}
-                event={e}
-                course={e.course_id ? courseMap[e.course_id] : undefined}
-                semester={semester}
-                onToggle={setStatus}
-                onEdit={setEditing}
-              />
-            ))}
-          </div>
+        {layers.showEvents && (
+          selectedEvents.length === 0 ? (
+            <div className="text-sm text-dim py-8 text-center bg-card rounded-xl border border-border">
+              今日无事件
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {selectedEvents.map((e) => (
+                <EventCard
+                  key={e.id}
+                  event={e}
+                  course={e.course_id ? courseMap[e.course_id] : undefined}
+                  semester={semester}
+                  onToggle={setStatus}
+                  onEdit={setEditing}
+                />
+              ))}
+            </div>
+          )
+        )}
+
+        {layers.showCourses && (
+          <DayCourseList
+            date={selected}
+            schedule={daySchedule}
+            courseMap={courseMap}
+          />
         )}
       </div>
 
@@ -269,7 +378,9 @@ export default function CalendarView() {
         selectedDate={selected}
         events={events}
         courseMap={courseMap}
+        scheduleByDay={scheduleByDay}
         semester={semester}
+        layers={layers}
         onToggle={setStatus}
         onEdit={setEditing}
         onSelectDate={setSelected}
@@ -324,7 +435,9 @@ interface MonthProps {
     end_date: string
   }
   eventsByDate: Map<string, Event[]>
+  scheduleByDay: Map<number, WeeklySchedule[]>
   courseMap: Record<string, Course>
+  layers: Layers
   onSelect: (iso: string) => void
 }
 
@@ -334,18 +447,17 @@ function MonthGrid({
   selected,
   semester,
   eventsByDate,
+  scheduleByDay,
   courseMap,
+  layers,
   onSelect,
 }: MonthProps) {
   const todayIso = isoOf(new Date())
-  // 6 weeks * 7 days = 42; split into rows for the desktop week-label column.
   const rows: Date[][] = []
   for (let i = 0; i < 6; i++) rows.push(grid.slice(i * 7, i * 7 + 7))
 
   return (
     <div className="p-2">
-      {/* Weekday header. Desktop has an extra spacer cell to align with the
-          week-label column; mobile uses a plain 7-col grid. */}
       <div className="grid grid-cols-7 md:grid-cols-[36px_repeat(7,1fr)] text-center text-[11px] font-medium text-muted py-2">
         <div className="hidden md:block" />
         {WEEKDAYS.map((w, i) => (
@@ -358,8 +470,6 @@ function MonthGrid({
       <div className="grid grid-cols-7 md:grid-cols-[36px_repeat(7,1fr)] gap-0.5">
         {rows.map((row, rowIdx) => (
           <Fragment key={rowIdx}>
-            {/* Desktop-only week label column. The label comes from the
-                Sunday cell of the row so it lines up with the left edge. */}
             <div className="hidden md:flex items-center justify-center text-[10px] font-semibold text-muted">
               {weekLabel(isoOf(row[0]))}
             </div>
@@ -372,7 +482,9 @@ function MonthGrid({
                 todayIso={todayIso}
                 semester={semester}
                 eventsByDate={eventsByDate}
+                scheduleByDay={scheduleByDay}
                 courseMap={courseMap}
+                layers={layers}
                 onSelect={onSelect}
               />
             ))}
@@ -390,7 +502,9 @@ interface CellProps {
   todayIso: string
   semester: MonthProps['semester']
   eventsByDate: Map<string, Event[]>
+  scheduleByDay: Map<number, WeeklySchedule[]>
   courseMap: Record<string, Course>
+  layers: Layers
   onSelect: (iso: string) => void
 }
 
@@ -401,14 +515,19 @@ function Cell({
   todayIso,
   semester,
   eventsByDate,
+  scheduleByDay,
   courseMap,
+  layers,
   onSelect,
 }: CellProps) {
   const iso = isoOf(d)
   const inMonth = d.getMonth() === cursor.getMonth()
   const isToday = iso === todayIso
   const isSelected = iso === selected
-  const dayEvents = eventsByDate.get(iso) ?? []
+  const dayEvents = layers.showEvents ? eventsByDate.get(iso) ?? [] : []
+  const daySessions = layers.showCourses
+    ? scheduleByDay.get(d.getDay()) ?? []
+    : []
   const isExamWeek =
     semester.exam_start &&
     semester.exam_end &&
@@ -435,20 +554,15 @@ function Cell({
       ? 'border-accent/60 md:border-transparent'
       : 'border-transparent'
 
-  // Mobile dots (small colored dots under the date number).
   const dots = dayEvents.slice(0, 4).map((e) => {
     if (e.type === 'holiday') return '#10b981'
     if (e.course_id && courseMap[e.course_id]) return courseMap[e.course_id].color
     return '#6b7280'
   })
 
-  // Desktop pills (max 3 visible + "+N more"). We keep this separate from
-  // the mobile dot logic so each surface renders its own markup.
   const visiblePills = dayEvents.slice(0, 3)
   const hiddenCount = Math.max(0, dayEvents.length - visiblePills.length)
 
-  // Inline "today" treatment on desktop: a small filled circle behind the
-  // date number. Mobile still uses the border-accent ring (unchanged).
   const dateCircleClass = isToday
     ? 'md:bg-accent md:text-white md:w-6 md:h-6 md:flex md:items-center md:justify-center md:rounded-full md:text-xs md:font-semibold'
     : ''
@@ -466,11 +580,21 @@ function Cell({
       onClick={() => onSelect(iso)}
       className={`aspect-square md:aspect-auto md:h-24 rounded-lg p-1 md:p-1.5 flex flex-col items-center md:items-stretch justify-start border transition-colors ${border} ${bg} ${inMonth ? '' : 'opacity-40'} hover:bg-hover text-left`}
     >
-      <span
-        className={`text-xs md:text-[13px] ${dateTextColor} ${dateCircleClass} md:self-start`}
-      >
-        {d.getDate()}
-      </span>
+      <div className="w-full flex items-center justify-between gap-1">
+        <span
+          className={`text-xs md:text-[13px] ${dateTextColor} ${dateCircleClass} md:self-start`}
+        >
+          {d.getDate()}
+        </span>
+        {inMonth && daySessions.length > 0 && (
+          <span
+            className="text-[9px] md:text-[10px] text-dim font-mono leading-none"
+            title={`${daySessions.length} 节课`}
+          >
+            {daySessions.length}节
+          </span>
+        )}
+      </div>
 
       {/* Mobile dot row */}
       {dots.length > 0 && (
@@ -519,6 +643,7 @@ interface DayProps {
   courseMap: Record<string, Course>
   semester: Parameters<typeof weekNumber>[1]
   schedule: WeeklySchedule[]
+  layers: Layers
   onToggle: (id: string, status: 'pending' | 'completed') => void
   onEdit: (event: Event) => void
   onPrevDay: () => void
@@ -532,6 +657,7 @@ function DayView({
   courseMap,
   semester,
   schedule,
+  layers,
   onToggle,
   onEdit,
   onPrevDay,
@@ -566,71 +692,415 @@ function DayView({
         </button>
       </div>
 
-      <section>
-        <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
-          Events ({events.length})
-        </h3>
-        {events.length === 0 ? (
-          <div className="text-sm text-dim py-4 text-center bg-card rounded-lg border border-border">
-            今日无事件
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {events.map((e) => (
-              <EventCard
-                key={e.id}
-                event={e}
-                course={e.course_id ? courseMap[e.course_id] : undefined}
-                semester={semester as never}
-                onToggle={onToggle}
-                onEdit={onEdit}
-              />
-            ))}
-          </div>
-        )}
-      </section>
+      {layers.showEvents && (
+        <section>
+          <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
+            Events ({events.length})
+          </h3>
+          {events.length === 0 ? (
+            <div className="text-sm text-dim py-4 text-center bg-card rounded-lg border border-border">
+              今日无事件
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {events.map((e) => (
+                <EventCard
+                  key={e.id}
+                  event={e}
+                  course={e.course_id ? courseMap[e.course_id] : undefined}
+                  semester={semester as never}
+                  onToggle={onToggle}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
-      <section>
-        <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
-          课程时间表
-        </h3>
-        {schedule.length === 0 ? (
-          <div className="text-sm text-dim py-4 text-center bg-card rounded-lg border border-border">
-            今日无课
-          </div>
-        ) : (
-          <div className="relative bg-card rounded-lg border border-border">
-            {schedule.map((s) => {
-              const c = courseMap[s.course_id]
-              return (
+      {layers.showCourses && (
+        <DayCourseList date={date} schedule={schedule} courseMap={courseMap} />
+      )}
+    </div>
+  )
+}
+
+// Shared "today's classes" list used by both DayView and the mobile month
+// view's selected-day drawer. Highlights the next-up / in-progress class when
+// the date is today.
+export function DayCourseList({
+  date,
+  schedule,
+  courseMap,
+}: {
+  date: string
+  schedule: WeeklySchedule[]
+  courseMap: Record<string, Course>
+}) {
+  // Re-render every minute so "next class" stays accurate as time advances.
+  const [, setNowTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick((n) => n + 1), 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const nextSession = findNextSession(date, schedule)
+  const isToday = date === isoOf(new Date())
+  const nextCourse = nextSession ? courseMap[nextSession.course_id] : null
+
+  return (
+    <section>
+      <h3 className="text-xs font-semibold tracking-wider text-muted uppercase mb-2">
+        课程时间表
+      </h3>
+      {isToday && nextSession && nextCourse && (
+        <div className="mb-2 rounded-lg border border-accent/40 bg-accent/10 p-2.5 flex items-center gap-2">
+          <span className="text-[10px] font-semibold text-accent bg-accent/15 px-1.5 py-0.5 rounded shrink-0">
+            下一节
+          </span>
+          <span className="flex-1 min-w-0 text-sm text-text truncate">
+            <span className="font-semibold font-mono">{nextCourse.code}</span>{' '}
+            <span className="text-dim">·</span> {nextSession.start_time.slice(0, 5)}
+            {nextSession.location && (
+              <>
+                {' '}
+                <span className="text-dim">·</span> {nextSession.location}
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {schedule.length === 0 ? (
+        <div className="text-sm text-dim py-4 text-center bg-card rounded-lg border border-border">
+          今日无课
+        </div>
+      ) : (
+        <div className="relative bg-card rounded-lg border border-border">
+          {schedule.map((s) => {
+            const c = courseMap[s.course_id]
+            const highlight = nextSession?.id === s.id && isToday
+            return (
+              <div
+                key={s.id}
+                className={`flex gap-3 p-3 border-b border-border last:border-b-0 ${
+                  highlight ? 'bg-accent/5' : ''
+                }`}
+              >
+                <div className="w-16 text-xs text-dim shrink-0 font-mono">
+                  <div>{s.start_time.slice(0, 5)}</div>
+                  <div>{s.end_time.slice(0, 5)}</div>
+                </div>
                 <div
-                  key={s.id}
-                  className="flex gap-3 p-3 border-b border-border last:border-b-0"
-                >
-                  <div className="w-16 text-xs text-dim shrink-0">
-                    <div>{s.start_time.slice(0, 5)}</div>
-                    <div>{s.end_time.slice(0, 5)}</div>
+                  className="w-1 rounded-full shrink-0"
+                  style={{ backgroundColor: c?.color ?? '#6b7280' }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-text truncate">
+                    {c ? `${c.code} ${c.name}` : '未知课程'}
                   </div>
-                  <div
-                    className="w-1 rounded-full shrink-0"
-                    style={{ backgroundColor: c?.color ?? '#6b7280' }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-text">
-                      {c ? `${c.code} ${c.name}` : '未知课程'}
-                    </div>
-                    <div className="text-xs text-dim">
-                      {s.type}
-                      {s.location ? ` · ${s.location}` : ''}
-                      {s.group_number ? ` · G${s.group_number}` : ''}
-                    </div>
+                  <div className="text-xs text-dim flex items-center gap-1 flex-wrap">
+                    <span>{s.type}</span>
+                    {s.location && (
+                      <>
+                        <span>·</span>
+                        <span className="inline-flex items-center gap-0.5">
+                          <MapPin size={10} /> {s.location}
+                        </span>
+                      </>
+                    )}
+                    {s.group_number && (
+                      <>
+                        <span>·</span>
+                        <span>G{s.group_number}</span>
+                      </>
+                    )}
                   </div>
                 </div>
-              )
-            })}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+interface WeekViewProps {
+  cursor: Date
+  onCursorChange: (d: Date) => void
+  courseMap: Record<string, Course>
+  scheduleByDay: Map<number, WeeklySchedule[]>
+  eventsByDate: Map<string, Event[]>
+  semester: Parameters<typeof weekNumber>[1]
+  layers: Layers
+  onSelectDate: (iso: string) => void
+}
+
+const HOUR_PX_WEEK = 56
+
+function WeekView({
+  cursor,
+  onCursorChange,
+  courseMap,
+  scheduleByDay,
+  eventsByDate,
+  semester,
+  layers,
+  onSelectDate,
+}: WeekViewProps) {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Monday-based week start. getDay() returns 0=Sun..6=Sat; convert to
+  // offset so that Monday is index 0.
+  const weekStart = useMemo(() => {
+    const d = new Date(cursor)
+    const dow = d.getDay()
+    const offset = (dow + 6) % 7
+    d.setDate(d.getDate() - offset)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }, [cursor])
+
+  const weekDays = useMemo(() => {
+    const arr: Date[] = []
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart)
+      d.setDate(weekStart.getDate() + i)
+      arr.push(d)
+    }
+    return arr
+  }, [weekStart])
+
+  // Compute start / end hours from the full schedule so the grid is always
+  // tall enough for any recurring session, not just this week's.
+  const { startMin, endMin } = useMemo(() => {
+    let s = 8 * 60
+    let e = 18 * 60
+    for (const arr of scheduleByDay.values()) {
+      for (const sess of arr) {
+        s = Math.min(s, toMin(sess.start_time))
+        e = Math.max(e, toMin(sess.end_time))
+      }
+    }
+    return {
+      startMin: Math.floor(s / 60) * 60,
+      endMin: Math.ceil(e / 60) * 60,
+    }
+  }, [scheduleByDay])
+
+  const hours = (endMin - startMin) / 60
+  const gridHeight = hours * HOUR_PX_WEEK
+
+  const timeLabels: number[] = []
+  for (let m = startMin; m <= endMin; m += 60) timeLabels.push(m)
+
+  const todayIso = isoOf(new Date())
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  const nowInRange = nowMin >= startMin && nowMin <= endMin
+
+  const shiftWeek = (delta: number) => {
+    const d = new Date(weekStart)
+    d.setDate(d.getDate() + delta * 7)
+    onCursorChange(d)
+  }
+
+  const weekLabelStr = (() => {
+    const s = weekStart
+    const e = weekDays[6]
+    const fmt = (x: Date) =>
+      `${String(x.getMonth() + 1).padStart(2, '0')}/${String(x.getDate()).padStart(2, '0')}`
+    return `${fmt(s)} – ${fmt(e)}`
+  })()
+  const wk = weekNumber(isoOf(weekStart), semester)
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      {/* Week controls */}
+      <div className="px-4 py-2 flex items-center justify-between border-b border-border shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => shiftWeek(-1)}
+            className="p-1.5 rounded hover:bg-hover text-dim"
+            aria-label="上一周"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <div className="text-sm font-semibold text-text min-w-[7rem] text-center">
+            {weekLabelStr}
+            {wk !== null && (
+              <span className="ml-1 text-[10px] text-dim font-normal">
+                · 第{wk}周
+              </span>
+            )}
           </div>
-        )}
-      </section>
+          <button
+            type="button"
+            onClick={() => shiftWeek(1)}
+            className="p-1.5 rounded hover:bg-hover text-dim"
+            aria-label="下一周"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => onCursorChange(new Date())}
+          className="text-xs font-medium px-3 py-1 rounded-full border border-accent text-accent hover:bg-accent/10 transition-colors"
+        >
+          本周
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
+        <div
+          className="grid min-w-[800px]"
+          style={{ gridTemplateColumns: '56px repeat(7, minmax(0, 1fr))' }}
+        >
+          <div className="sticky top-0 z-20 bg-main border-b border-border" />
+          {weekDays.map((day) => {
+            const iso = isoOf(day)
+            const isToday = iso === todayIso
+            const dayEvents = layers.showEvents ? eventsByDate.get(iso) ?? [] : []
+            return (
+              <button
+                key={iso}
+                type="button"
+                onClick={() => onSelectDate(iso)}
+                className={`sticky top-0 z-20 bg-main px-2 py-2 text-xs font-medium border-b border-border flex flex-col items-center gap-1 hover:bg-hover transition-colors ${
+                  isToday ? 'text-accent font-semibold' : 'text-dim'
+                }`}
+              >
+                <div>
+                  周{['日', '一', '二', '三', '四', '五', '六'][day.getDay()]}
+                </div>
+                <div className="font-mono text-[11px]">
+                  {day.getMonth() + 1}/{day.getDate()}
+                </div>
+                {dayEvents.length > 0 && (
+                  <div className="flex flex-wrap justify-center gap-0.5 w-full">
+                    {dayEvents.slice(0, 3).map((e) => (
+                      <span
+                        key={e.id}
+                        className={`text-[9px] leading-tight px-1 rounded truncate max-w-full ${eventPillClass(e.type)}`}
+                        title={e.title}
+                      >
+                        {e.title.length > 8
+                          ? e.title.slice(0, 7) + '…'
+                          : e.title}
+                      </span>
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <span className="text-[9px] text-muted">
+                        +{dayEvents.length - 3}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </button>
+            )
+          })}
+
+          {/* Time axis */}
+          <div
+            className="relative border-r border-border"
+            style={{ height: `${gridHeight}px` }}
+          >
+            {timeLabels.map((m) => (
+              <div
+                key={m}
+                className="absolute right-2 text-[10px] text-muted -translate-y-1/2 font-mono"
+                style={{ top: `${((m - startMin) / 60) * HOUR_PX_WEEK}px` }}
+              >
+                {String(Math.floor(m / 60)).padStart(2, '0')}:00
+              </div>
+            ))}
+          </div>
+
+          {/* Day columns */}
+          {weekDays.map((day) => {
+            const iso = isoOf(day)
+            const isToday = iso === todayIso
+            const sessions = layers.showCourses
+              ? scheduleByDay.get(day.getDay()) ?? []
+              : []
+            return (
+              <div
+                key={iso}
+                className={`relative border-r border-border last:border-r-0 ${
+                  isToday ? 'bg-accent/[0.03]' : ''
+                }`}
+                style={{ height: `${gridHeight}px` }}
+              >
+                {Array.from({ length: hours }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="absolute left-0 right-0 border-t border-border/60"
+                    style={{ top: `${i * HOUR_PX_WEEK}px` }}
+                  />
+                ))}
+                {nowInRange && isToday && (
+                  <div
+                    className="absolute left-0 right-0 h-0.5 bg-red-500 z-10 pointer-events-none"
+                    style={{
+                      top: `${((nowMin - startMin) / 60) * HOUR_PX_WEEK}px`,
+                    }}
+                  >
+                    <div className="absolute -left-1 -top-[3px] w-2 h-2 rounded-full bg-red-500" />
+                  </div>
+                )}
+                {sessions.map((s) => {
+                  const c = courseMap[s.course_id]
+                  if (!c) return null
+                  const startM = toMin(s.start_time)
+                  const endM = toMin(s.end_time)
+                  const top = ((startM - startMin) / 60) * HOUR_PX_WEEK
+                  const height = Math.max(
+                    22,
+                    ((endM - startM) / 60) * HOUR_PX_WEEK - 2,
+                  )
+                  const isNow =
+                    isToday && nowMin >= startM && nowMin < endM
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => onSelectDate(iso)}
+                      className={`absolute left-1 right-1 rounded-md px-1.5 py-1 text-left overflow-hidden transition-shadow ${
+                        isNow ? 'ring-2 ring-accent shadow-md' : 'shadow-sm'
+                      }`}
+                      style={{
+                        top: `${top}px`,
+                        height: `${height}px`,
+                        backgroundColor: `${c.color}22`,
+                        borderLeft: `3px solid ${c.color}`,
+                      }}
+                      title={`${c.code} ${c.name}\n${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}${s.location ? '\n' + s.location : ''}`}
+                    >
+                      <div
+                        className="text-[10px] font-semibold truncate leading-tight font-mono"
+                        style={{ color: c.color }}
+                      >
+                        {c.code}
+                      </div>
+                      {height > 34 && (
+                        <div className="text-[10px] text-text truncate leading-tight">
+                          {s.start_time.slice(0, 5)}
+                          {s.location ? ` · ${s.location}` : ''}
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
