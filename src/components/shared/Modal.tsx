@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -41,7 +42,11 @@ export default function Modal({
 
   if (!open) return null
 
-  return (
+  // Render through a portal to document.body so `position: fixed` is always
+  // relative to the viewport. An ancestor with backdrop-filter (e.g. the
+  // sticky Header using backdrop-blur) would otherwise become the containing
+  // block for fixed descendants and trap the modal inside the header.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={onClose}
@@ -63,6 +68,7 @@ export default function Modal({
         <div className="flex-1 overflow-y-auto p-4">{children}</div>
         {footer && <div className="border-t border-border p-3 shrink-0">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
