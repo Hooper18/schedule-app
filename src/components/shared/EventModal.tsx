@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { Split, Trash2 } from 'lucide-react'
 import Modal from './Modal'
+import SplitEventModal from './SplitEventModal'
 import { supabase } from '../../lib/supabase'
 import type { Course, Event, EventStatus, EventType } from '../../lib/types'
 
@@ -47,6 +48,7 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [confirmDel, setConfirmDel] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
 
   useEffect(() => {
     if (!event) return
@@ -63,6 +65,7 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
     setDateSource(event.date_source)
     setErr(null)
     setConfirmDel(false)
+    setSplitOpen(false)
   }, [event])
 
   // Manually editing the date means the user has confirmed it — clear the
@@ -121,6 +124,7 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
   }
 
   return (
+    <>
     <Modal
       open={!!event}
       title="编辑事件"
@@ -128,13 +132,26 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
       footer={
         <div className="flex gap-2">
           {!confirmDel ? (
-            <button
-              type="button"
-              onClick={() => setConfirmDel(true)}
-              className="px-3 py-2.5 rounded-lg border border-red-500/40 text-red-500 hover:bg-red-500/10 text-sm font-medium flex items-center gap-1"
-            >
-              <Trash2 size={14} /> 删除
-            </button>
+            <>
+              {/* Split stays deliberately muted — it's a rarely-used power
+                  action ("Quizzes (×3)" → 3 independent rows). The button
+                  is discoverable but not competing with save. */}
+              <button
+                type="button"
+                onClick={() => setSplitOpen(true)}
+                className="px-3 py-2.5 rounded-lg bg-card border border-border text-dim hover:text-text hover:bg-hover text-sm font-medium flex items-center gap-1"
+                title="把合并的事件拆成多条独立事件"
+              >
+                <Split size={14} /> 拆分
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDel(true)}
+                className="px-3 py-2.5 rounded-lg border border-red-500/40 text-red-500 hover:bg-red-500/10 text-sm font-medium flex items-center gap-1"
+              >
+                <Trash2 size={14} /> 删除
+              </button>
+            </>
           ) : (
             <>
               <button
@@ -273,6 +290,19 @@ export default function EventModal({ event, courses, onClose, onSaved }: Props) 
         {err && <div className="text-sm text-red-500">{err}</div>}
       </form>
     </Modal>
+    {/* Split UX is a modal on top of the edit modal. Uses the original
+        `event` (not the unsaved form state) — the user should save any
+        in-flight edits first if they want those to propagate to children. */}
+    <SplitEventModal
+      event={splitOpen ? event : null}
+      onClose={() => setSplitOpen(false)}
+      onSplit={() => {
+        setSplitOpen(false)
+        onSaved()
+        onClose()
+      }}
+    />
+    </>
   )
 }
 
