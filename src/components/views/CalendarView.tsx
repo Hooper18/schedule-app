@@ -360,11 +360,13 @@ export default function CalendarView() {
 
       {/* Mobile-only: minimal bottom drawer. No title / navigation / event
           list — the month grid already communicates that. Only renders when
-          the selected day actually has classes, so empty days stay clean. */}
+          the selected day actually has classes, so empty days stay clean.
+          pb-36 leaves room for BottomNav (h-16) + safe-area so the last
+          class card isn't occluded by the nav bar. */}
       {layers.showCourses && daySchedule.length > 0 && (
         // overscroll-contain prevents reach-boundary gestures from bubbling
         // up and dragging the month grid / page along on iOS & Android.
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar px-3 py-2 pb-24 md:hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar px-3 py-2 pb-36 md:hidden">
           <DayCourseList
             date={selected}
             schedule={daySchedule}
@@ -877,10 +879,11 @@ function WeekView({
   }, [weekStart])
 
   // Compute start / end hours from the full schedule so the grid is always
-  // tall enough for any recurring session, not just this week's.
+  // tall enough for any recurring session, not just this week's. Default
+  // range is 08:00–20:00 because XMUM has evening classes running up to 20:00.
   const { startMin, endMin } = useMemo(() => {
     let s = 8 * 60
-    let e = 18 * 60
+    let e = 20 * 60
     for (const arr of scheduleByDay.values()) {
       for (const sess of arr) {
         s = Math.min(s, toMin(sess.start_time))
@@ -1025,7 +1028,16 @@ function WeekView({
                 <div>
                   周{['日', '一', '二', '三', '四', '五', '六'][day.getDay()]}
                 </div>
-                <div className="font-mono text-[11px]">
+                {/* Today marker is a small filled circle around the date
+                    number, matching the month view's convention. No more
+                    full-column tint — that read as heavy-handed. */}
+                <div
+                  className={`font-mono text-[11px] ${
+                    isToday
+                      ? 'bg-accent text-white rounded-full px-1.5 py-0.5 leading-none font-semibold'
+                      : ''
+                  }`}
+                >
                   {day.getMonth() + 1}/{day.getDate()}
                 </div>
                 {dayEvents.length > 0 && (
@@ -1078,9 +1090,10 @@ function WeekView({
             return (
               <div
                 key={iso}
-                className={`relative border-r border-border last:border-r-0 ${
-                  isToday ? 'bg-accent/[0.03]' : ''
-                }`}
+                // No column-wide tint for today — the header pill & red now
+                // line already mark it. A column tint looks heavy with many
+                // courses stacked.
+                className="relative border-r border-border last:border-r-0"
                 style={{ height: `${gridHeight}px` }}
               >
                 {Array.from({ length: hours }).map((_, i) => (

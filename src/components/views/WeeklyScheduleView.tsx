@@ -61,9 +61,12 @@ export default function WeeklyScheduleView() {
     return m
   }, [courses])
 
+  // Default range is 08:00–20:00 — XMUM has evening classes running up to
+  // 20:00, so the axis needs to cover them even if the current schedule
+  // doesn't happen to stretch that far.
   const { startMin, endMin } = useMemo(() => {
     let s = 8 * 60
-    let e = 18 * 60
+    let e = 20 * 60
     for (const slot of schedule) {
       s = Math.min(s, toMin(slot.start_time))
       e = Math.max(e, toMin(slot.end_time))
@@ -254,9 +257,9 @@ export default function WeeklyScheduleView() {
           {sessionsByDay.map((sessions, dayIdx) => (
             <div
               key={dayIdx}
-              className={`relative border-r border-border last:border-r-0 ${
-                dayIdx === todayDow ? 'bg-accent/[0.03]' : ''
-              }`}
+              // No column-wide today tint — header already marks today, and
+              // the red now-line runs through this column anyway.
+              className="relative border-r border-border last:border-r-0"
               style={{ height: `${gridHeight}px` }}
             >
               {renderGridBackground()}
