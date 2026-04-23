@@ -54,6 +54,12 @@ export default function TopupModal({ onClose }: Props) {
               className={`text-2xl font-semibold mt-1 ${low ? 'text-red-500' : 'text-text'}`}
             >
               {balance === null ? '…' : formatUSD(balance)}
+              <span className="ml-1.5 text-xs text-muted font-normal align-baseline">
+                USD
+              </span>
+            </div>
+            <div className="text-[10px] text-muted mt-1">
+              账户金额统一以美元（USD）计价
             </div>
             {low && (
               <div className="text-xs text-red-500 mt-1">余额不足，请充值</div>

@@ -1,9 +1,17 @@
 import { useState } from 'react'
-import { Sparkles, Check, X, Trash2 } from 'lucide-react'
-import { useClaude, type ParsedCourse, type ParsedCourseSession } from '../../../hooks/useClaude'
+import { Sparkles, Check, X, Trash2, Wallet } from 'lucide-react'
+import {
+  useClaude,
+  ClaudeProxyError,
+  type ParsedCourse,
+  type ParsedCourseSession,
+} from '../../../hooks/useClaude'
+import { useBalance } from '../../../hooks/useBalance'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
 import type { Semester } from '../../../lib/types'
+import { formatUSD, LOW_BALANCE_THRESHOLD_USD } from '../../../lib/balance'
+import TopupModal from '../../TopupModal'
 
 const DAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
 const SESSION_TYPES: ParsedCourseSession['type'][] = [
@@ -41,6 +49,7 @@ export default function CoursePastePanel({
 }: Props) {
   const { user } = useAuth()
   const { parseCourseTimetable, loading, error } = useClaude()
+  const { balance, reload: reloadBalance } = useBalance()
   const [input, setInput] = useState('')
   const [candidates, setCandidates] = useState<ParsedCourse[]>(
     initialCandidates ?? [],
@@ -48,6 +57,8 @@ export default function CoursePastePanel({
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
+  const [topupOpen, setTopupOpen] = useState(false)
+  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   const run = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,8 +71,15 @@ export default function CoursePastePanel({
       if (courses.length === 0) {
         setSaveErr('没解析到课程，检查粘贴内容是否完整')
       }
-    } catch {
-      // hook.error shows
+    } catch (e) {
+      if (e instanceof ClaudeProxyError && e.stage === 'insufficient_balance') {
+        setSaveErr('余额不足，请先充值或兑换邀请码后再试')
+      }
+      // hook.error shows for other errors
+    } finally {
+      // Pre-deduct + refund-on-failure happens server-side — pull fresh
+      // balance so the banner reflects reality after the parse attempt.
+      reloadBalance()
     }
   }
 
@@ -280,6 +298,31 @@ export default function CoursePastePanel({
 
   return (
     <section className="space-y-3">
+      {/* Balance banner — claude-proxy charges for course_import too. Cost
+          is usually tiny (plain text paste), but the server will still 402
+          if the balance is empty. */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+          lowBalance
+            ? 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+            : 'bg-card border-border text-dim'
+        }`}
+      >
+        <Wallet size={14} className="shrink-0" />
+        <span className="flex-1">
+          余额 {balance === null ? '…' : formatUSD(balance)}
+          <span className="ml-1 text-[10px] text-muted">USD</span>
+          {lowBalance && '（余额不足，AI 解析将失败）'}
+        </span>
+        <button
+          type="button"
+          onClick={() => setTopupOpen(true)}
+          className="text-[11px] px-2 py-0.5 rounded bg-accent text-white font-medium"
+        >
+          充值
+        </button>
+      </div>
+
       <form onSubmit={run} className="space-y-2">
         <textarea
           value={input}
@@ -344,6 +387,8 @@ export default function CoursePastePanel({
           </div>
         </>
       )}
+
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </section>
   )
 }

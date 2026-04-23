@@ -83,6 +83,9 @@ export default function UserMenu() {
               className={`ml-auto text-xs ${low ? 'text-red-500 font-medium' : 'text-dim'}`}
             >
               {balance === null ? '…' : formatUSD(balance)}
+              <span className="ml-1 text-[9px] text-muted font-normal">
+                USD
+              </span>
             </span>
           </button>
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
+  Gift,
   LayoutGrid,
   ListChecks,
   MapPin,
@@ -10,10 +11,12 @@ import Layout from '../components/layout/Layout'
 import { useSemester } from '../hooks/useSemester'
 import { useCourses } from '../hooks/useCourses'
 import { useEvents } from '../hooks/useEvents'
+import { useBalance } from '../hooks/useBalance'
 import {
   CurrentClassCard,
   NextClassCard,
 } from '../components/shared/ClassStatusCards'
+import TopupModal from '../components/TopupModal'
 import {
   computeCurrentAndNext,
   scheduleByDow,
@@ -40,6 +43,12 @@ export default function Home() {
   const { semester, loading: semLoading } = useSemester()
   const { courses, schedule } = useCourses(semester?.id)
   const { events } = useEvents(semester?.id)
+  const { balance } = useBalance()
+  const [topupOpen, setTopupOpen] = useState(false)
+  // `balance === 0` specifically (not a low-threshold check): we only want
+  // to prompt brand-new users who haven't redeemed an invite code or been
+  // topped up. Loading state (null) suppresses the banner to avoid flash.
+  const showZeroBalanceBanner = balance === 0
 
   // Per-minute tick so every "now"-derived field (greeting boundary,
   // current/next session countdowns, 已过课程灰显) stays fresh without a
@@ -95,6 +104,32 @@ export default function Home() {
           <p className="text-dim text-sm mt-1">{dateHeading(now)}</p>
         </section>
 
+        {/* Zero-balance onboarding banner. Opening TopupModal lands the
+            user on both the 兑换邀请码 input and 充值 instructions in one
+            place, so a single CTA button covers both "I have a code" and
+            "I don't have a code" flows. */}
+        {showZeroBalanceBanner && (
+          <section className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3">
+            <Gift size={20} className="shrink-0 mt-0.5 text-accent" />
+            <div className="flex-1 min-w-0 text-sm text-text leading-relaxed">
+              <div className="font-semibold">你还没有余额</div>
+              <p className="text-xs text-dim mt-0.5">
+                兑换邀请码可获得{' '}
+                <span className="text-text font-medium">$1.00</span>{' '}
+                初始额度，用于 AI 解析（Moodle 扫描 / 课件上传 / 快速添加）。
+                没有邀请码也可以直接充值。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTopupOpen(true)}
+              className="shrink-0 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium"
+            >
+              去兑换
+            </button>
+          </section>
+        )}
+
         {semLoading ? (
           <div className="p-8 text-center text-dim text-sm">加载中…</div>
         ) : !semester ? (
@@ -136,6 +171,7 @@ export default function Home() {
           </div>
         )}
       </div>
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </Layout>
   )
 }

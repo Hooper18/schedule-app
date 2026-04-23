@@ -1,10 +1,17 @@
 import { useState } from 'react'
-import { Sparkles, Check, X, Trash2 } from 'lucide-react'
-import { useClaude, type ParsedEvent } from '../../../hooks/useClaude'
+import { Sparkles, Check, X, Trash2, Wallet } from 'lucide-react'
+import {
+  useClaude,
+  ClaudeProxyError,
+  type ParsedEvent,
+} from '../../../hooks/useClaude'
+import { useBalance } from '../../../hooks/useBalance'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
 import type { Course, EventType, Semester } from '../../../lib/types'
 import { typeLabel } from '../../../lib/utils'
+import { formatUSD, LOW_BALANCE_THRESHOLD_USD } from '../../../lib/balance'
+import TopupModal from '../../TopupModal'
 
 const EVENT_TYPES: EventType[] = [
   'deadline',
@@ -30,11 +37,14 @@ interface Props {
 export default function QuickAddPanel({ semester, courses, onSaved }: Props) {
   const { user } = useAuth()
   const { parseEvents, loading, error } = useClaude()
+  const { balance, reload: reloadBalance } = useBalance()
   const [input, setInput] = useState('')
   const [candidates, setCandidates] = useState<ParsedEvent[]>([])
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
+  const [topupOpen, setTopupOpen] = useState(false)
+  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   const run = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -47,8 +57,18 @@ export default function QuickAddPanel({ semester, courses, onSaved }: Props) {
       if (events.length === 0) {
         setSaveErr('没有解析出事件，换个说法试试？')
       }
-    } catch {
-      // error surfaced via hook
+    } catch (e) {
+      // Hook already stashes a generic error; overwrite it when the server
+      // told us the balance was the problem so the user gets an actionable
+      // message + topup affordance.
+      if (e instanceof ClaudeProxyError && e.stage === 'insufficient_balance') {
+        setSaveErr('余额不足，请先充值或兑换邀请码后再试')
+      }
+      // Other errors: hook.error surface handles it.
+    } finally {
+      // claude-proxy deducts on start and refunds on failure / empty result;
+      // balance may have moved either way, so always pull fresh.
+      reloadBalance()
     }
   }
 
@@ -92,6 +112,31 @@ export default function QuickAddPanel({ semester, courses, onSaved }: Props) {
 
   return (
     <section className="space-y-3">
+      {/* Balance banner — mirrors the other import panels. AI 解析 triggers
+          a server-side deduction, so the user needs to see their balance
+          before firing off a parse. */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+          lowBalance
+            ? 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+            : 'bg-card border-border text-dim'
+        }`}
+      >
+        <Wallet size={14} className="shrink-0" />
+        <span className="flex-1">
+          余额 {balance === null ? '…' : formatUSD(balance)}
+          <span className="ml-1 text-[10px] text-muted">USD</span>
+          {lowBalance && '（余额不足，AI 解析将失败）'}
+        </span>
+        <button
+          type="button"
+          onClick={() => setTopupOpen(true)}
+          className="text-[11px] px-2 py-0.5 rounded bg-accent text-white font-medium"
+        >
+          充值
+        </button>
+      </div>
+
       <form onSubmit={run} className="flex items-center gap-2 p-2 rounded-xl bg-card border border-border focus-within:border-accent">
         <Sparkles size={16} className="text-accent shrink-0 ml-1" />
         <input
@@ -152,6 +197,8 @@ export default function QuickAddPanel({ semester, courses, onSaved }: Props) {
           </div>
         </div>
       )}
+
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </section>
   )
 }

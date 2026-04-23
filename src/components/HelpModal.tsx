@@ -1,4 +1,4 @@
-import { Download, AlertTriangle, Chrome } from 'lucide-react'
+import { Download, AlertTriangle, Chrome, Wallet } from 'lucide-react'
 import type { ReactNode } from 'react'
 import Modal from './shared/Modal'
 
@@ -70,6 +70,35 @@ export default function HelpModal({ open, onClose }: Props) {
               <span className="text-text font-medium">Chrome</span>{' '}
               浏览器打开本站，其他浏览器（Safari / Firefox 等）不支持本教程用到的扩展加载方式。
             </p>
+          </div>
+        </div>
+
+        {/* Billing primer — AI is metered. New users need to know about the
+            invite-code bootstrap path before they hit the file-import step
+            and see a 402 with no context. */}
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <Wallet size={18} className="shrink-0 mt-0.5 text-amber-600" />
+          <div className="text-sm text-text leading-relaxed break-words space-y-1">
+            <div className="font-semibold">费用与初始额度</div>
+            <p className="text-xs text-dim">
+              AI 解析（Moodle 扫描、课件上传、快速添加、课表粘贴）按输入内容大小
+              向你账户扣费，以 <span className="text-text font-medium">USD（美元）</span>
+              计价，每次单独解析约 $0.01–$0.30。
+            </p>
+            <ul className="list-disc list-outside pl-5 text-xs text-dim space-y-0.5 marker:text-dim">
+              <li>
+                新用户凭邀请码可获得{' '}
+                <span className="text-text font-medium">$1.00</span>{' '}
+                初始额度（每账号限一次），在「右上角账户菜单 → 兑换邀请码」
+                中输入即可
+              </li>
+              <li>
+                余额不足时，添加开发者微信{' '}
+                <Code>hituchenguang</Code> 充值（支持微信 / 支付宝，按当日
+                汇率折算人民币）
+              </li>
+              <li>课程表导入、手动 CRUD、日历查看等非 AI 功能完全免费</li>
+            </ul>
           </div>
         </div>
 
