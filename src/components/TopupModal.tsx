@@ -1,7 +1,7 @@
 import { X, Wallet, RefreshCw } from 'lucide-react'
 import { useEffect } from 'react'
 import { useBalance, type BalanceTransaction } from '../hooks/useBalance'
-import { formatCNY, LOW_BALANCE_THRESHOLD_CNY } from '../lib/balance'
+import { formatUSD, LOW_BALANCE_THRESHOLD_USD } from '../lib/balance'
 import { useAuth } from '../contexts/AuthContext'
 
 type Props = {
@@ -20,7 +20,7 @@ export default function TopupModal({ onClose }: Props) {
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const low = balance !== null && balance < LOW_BALANCE_THRESHOLD_CNY
+  const low = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   return (
     <div
@@ -53,7 +53,7 @@ export default function TopupModal({ onClose }: Props) {
               <div
                 className={`text-2xl font-semibold mt-1 ${low ? 'text-red-500' : 'text-text'}`}
               >
-                {balance === null ? '…' : formatCNY(balance)}
+                {balance === null ? '…' : formatUSD(balance)}
               </div>
               {low && (
                 <div className="text-xs text-red-500 mt-1">余额不足，请充值</div>
@@ -73,7 +73,8 @@ export default function TopupModal({ onClose }: Props) {
           <div className="space-y-2">
             <h3 className="text-sm font-semibold">如何充值</h3>
             <p className="text-xs text-dim leading-relaxed">
-              请通过微信 / 支付宝转账到下方账号，备注
+              请通过微信 / 支付宝按汇率转账到下方账号（$ 按当日汇率折算为
+              人民币），备注
               <span className="text-text font-medium mx-1">
                 {user?.email ?? '你的注册邮箱'}
               </span>
@@ -127,7 +128,7 @@ function TransactionRow({ tx }: { tx: BalanceTransaction }) {
       </div>
       <div className={`text-sm font-medium ${color}`}>
         {sign}
-        {formatCNY(amount)}
+        {formatUSD(amount)}
       </div>
     </li>
   )

@@ -8,10 +8,17 @@
 // to this handler — we validate the user's JWT manually on POST by calling
 // Supabase's /auth/v1/user endpoint.
 //
+// Billing: every call deducts the user's balance BEFORE calling Claude.
+// Cost is computed here, server-side, from the actual request payload —
+// the client cannot influence the amount charged. On error or empty
+// results the deduction is refunded before we return. DB column names are
+// legacy `_cny` but the numeric values are USD.
+//
 // Every error response includes a `stage` field so the client (and you
 // reading Supabase logs) can tell exactly which step failed.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import { createClient } from "jsr:@supabase/supabase-js@2"
 import Anthropic from "npm:@anthropic-ai/sdk@^0.90.0"
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")
@@ -39,7 +46,46 @@ type Stage =
   | "no_tool_use"
   | "rate_limited"
   | "anthropic_api_error"
+  | "insufficient_balance"
+  | "deduct_failed"
   | "internal"
+
+// Pricing: must stay in sync with src/lib/balance.ts. Sale price = raw
+// Claude cost × API_COST_MULTIPLIER (covers proxy + Supabase + operations).
+const API_COST_MULTIPLIER = 2
+const MIN_COST_USD = 0.01
+// Hard cap on a single deduction; anything higher than this is almost
+// certainly an error (caller uploaded a huge blob) — fail early rather
+// than silently bleed a user's balance.
+const MAX_COST_USD = 2.0
+
+// Matches estimateCourseParseCostUsd() in src/lib/balance.ts. Rates assume
+// Claude 3.5 Sonnet ($3/M input, $15/M output).
+function estimateRawCostUsd(bytes: number, chars: number): number {
+  const inputTokens = bytes / 3 + chars / 2
+  const inputCost = (inputTokens / 1_000_000) * 3
+  const outputCost = 0.02
+  return Math.max(MIN_COST_USD, inputCost + outputCost)
+}
+
+// Approximate the original binary size of a base64 image. 1 base64 char
+// encodes 6 bits, so N chars ≈ N × 6/8 = N × 0.75 bytes (ignoring padding).
+function base64DecodedSize(b64: string): number {
+  return Math.floor(b64.length * 0.75)
+}
+
+// Short, human-readable label embedded in the balance_transactions.description
+// column so users looking at their consumption log can tell what was charged.
+function actionLabel(
+  action: "quick_add" | "file_import" | "course_import",
+  fileType: string | null,
+): string {
+  if (action === "quick_add") return "NLP 快速添加"
+  if (action === "course_import") return "课表解析"
+  if (fileType === "image") return "课件图片解析"
+  if (fileType) return `课件 ${fileType} 解析`
+  return "课件解析"
+}
 
 function jsonError(
   status: number,
@@ -912,6 +958,72 @@ Deno.serve(async (req) => {
     `[claude-proxy] user=${userId} action=${action} file_type=${fileType ?? "-"} input_len=${input.length} image=${isImageImport} courses=${courses.length} cal=${academicCalendar.length} today=${today}`,
   )
 
+  // ──────────────────────── Server-side pre-charge ────────────────────────
+  // Cost is computed from what this server actually received, NOT from a
+  // client-supplied number. Encoding the text in UTF-8 gives a stable byte
+  // count that matches Claude's token accounting better than string length.
+  const textBytes = new TextEncoder().encode(input).length
+  const imageBytes = isImageImport
+    ? base64DecodedSize(
+        typeof body.image_base64 === "string" ? body.image_base64 : "",
+      )
+    : 0
+  const totalBytes = textBytes + imageBytes
+  const rawCostUsd = estimateRawCostUsd(totalBytes, input.length)
+  const saleCostUsd = Number((rawCostUsd * API_COST_MULTIPLIER).toFixed(2))
+  // Reject obviously over-sized requests up front rather than silently
+  // capping. If this fires, the caller is probably uploading too much in
+  // one go and needs to split — better feedback than a surprise charge.
+  if (saleCostUsd > MAX_COST_USD) {
+    return jsonError(
+      400,
+      "validate_input",
+      `estimated cost $${saleCostUsd.toFixed(2)} exceeds per-call cap $${MAX_COST_USD}`,
+    )
+  }
+
+  // We need a Supabase client that runs SQL as the calling user so the
+  // `auth.uid()` inside deduct_balance / refund_balance resolves correctly.
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+  })
+
+  const chargeDescription = `AI ${action} (${actionLabel(action, fileType)})`
+  const { error: deductErr } = await supabase.rpc("deduct_balance", {
+    p_amount_cny: saleCostUsd,
+    p_description: chargeDescription,
+  })
+  if (deductErr) {
+    const msg = deductErr.message ?? "deduct failed"
+    if (msg.includes("insufficient balance")) {
+      return jsonError(402, "insufficient_balance", "余额不足", {
+        required_usd: saleCostUsd,
+      })
+    }
+    return jsonError(500, "deduct_failed", msg)
+  }
+
+  // Best-effort refund. Logs on failure but doesn't fail the caller's
+  // request — if Supabase is unreachable mid-flight the user may be left
+  // with a stuck deduction and would need manual attention.
+  const refund = async (reason: string) => {
+    try {
+      const { error } = await supabase.rpc("refund_balance", {
+        p_amount_cny: saleCostUsd,
+        p_description: `${chargeDescription}（${reason}）`,
+      })
+      if (error) {
+        console.error(
+          `[claude-proxy] refund failed user=${userId} reason=${reason}: ${error.message}`,
+        )
+      }
+    } catch (e) {
+      console.error(
+        `[claude-proxy] refund threw user=${userId} reason=${reason}: ${e instanceof Error ? e.message : String(e)}`,
+      )
+    }
+  }
+
   try {
     // Note: forced tool_choice is incompatible with adaptive thinking. We
     // keep forced tool_choice (guarantees structured output) and skip
@@ -927,6 +1039,7 @@ Deno.serve(async (req) => {
 
     const toolUse = response.content.find((b) => b.type === "tool_use")
     if (!toolUse || toolUse.type !== "tool_use") {
+      await refund("no tool_use 退款")
       return jsonError(
         502,
         "no_tool_use",
@@ -945,15 +1058,38 @@ Deno.serve(async (req) => {
       )
     }
 
+    // Empty payload → refund. The user asked for a parse and got nothing
+    // back; charging them feels wrong.
+    const events = toolInput.events
+    const coursesOut = toolInput.courses
+    const isEmpty =
+      (Array.isArray(events) && events.length === 0) ||
+      (Array.isArray(coursesOut) && coursesOut.length === 0)
+    if (isEmpty) {
+      await refund("无内容退款")
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          ...toolInput,
+          usage: response.usage,
+          charged_usd: 0,
+          refunded: true,
+        }),
+        { status: 200, headers: JSON_HEADERS },
+      )
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
         ...toolInput,
         usage: response.usage,
+        charged_usd: saleCostUsd,
       }),
       { status: 200, headers: JSON_HEADERS },
     )
   } catch (err) {
+    await refund("失败退款")
     if (err instanceof Anthropic.RateLimitError) {
       return jsonError(429, "rate_limited", err.message)
     }

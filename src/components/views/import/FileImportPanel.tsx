@@ -9,9 +9,15 @@ import {
   Image as ImageIcon,
   Plus,
   AlertTriangle,
+  Wallet,
 } from 'lucide-react'
-import { useClaude, type ParsedEvent } from '../../../hooks/useClaude'
+import {
+  useClaude,
+  ClaudeProxyError,
+  type ParsedEvent,
+} from '../../../hooks/useClaude'
 import { useCalendar } from '../../../hooks/useCalendar'
+import { useBalance } from '../../../hooks/useBalance'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
 import type { FileKind, ImportKind } from '../../../lib/fileParsers'
@@ -22,7 +28,14 @@ import type {
   Semester,
 } from '../../../lib/types'
 import { typeLabel } from '../../../lib/utils'
+import {
+  API_COST_MULTIPLIER,
+  estimateCourseParseCostUsd,
+  formatUSD,
+  LOW_BALANCE_THRESHOLD_USD,
+} from '../../../lib/balance'
 import Modal from '../../shared/Modal'
+import TopupModal from '../../TopupModal'
 
 const IMPORT_SOURCES: EventSource[] = [
   'ppt_import',
@@ -116,6 +129,7 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
   const { user } = useAuth()
   const { parseFileText, parseImage, loading, error } = useClaude()
   const { entries: calendar } = useCalendar(semester.id)
+  const { balance, reload: reloadBalance } = useBalance()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [phase, setPhase] = useState<Phase>({ stage: 'idle' })
@@ -123,6 +137,8 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
   const [localErr, setLocalErr] = useState<string | null>(null)
   const [okMsg, setOkMsg] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingSave | null>(null)
+  const [topupOpen, setTopupOpen] = useState(false)
+  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   const reset = () => {
     setPhase({ stage: 'idle' })
@@ -252,6 +268,14 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       hasImage: !!image,
     })
 
+    // Display-only estimate for the insufficient-balance toast. Real
+    // deduction is computed server-side in claude-proxy, not from this.
+    const bytes = files.reduce((s, f) => s + f.file.size, 0)
+    const estUsd = Number(
+      (estimateCourseParseCostUsd(bytes, payloadText.length) * API_COST_MULTIPLIER)
+        .toFixed(2),
+    )
+
     try {
       let events: ParsedEvent[]
       if (image) {
@@ -278,9 +302,17 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
       if (events.length === 0) {
         setLocalErr('Claude 没识别出事件')
       }
-    } catch {
-      // hook surfaces error
+    } catch (e) {
+      // Hook already set a generic error — overwrite with a user-actionable
+      // one when the server specifically said the balance was too low.
+      if (e instanceof ClaudeProxyError && e.stage === 'insufficient_balance') {
+        setLocalErr(`需要 ${formatUSD(estUsd)}，余额不足，请充值后再试`)
+      }
       setPhase({ stage: 'selected', files })
+    } finally {
+      // claude-proxy deducts on start and refunds on error / empty result —
+      // either way the balance row may have moved, so force a refresh.
+      reloadBalance()
     }
   }
 
@@ -472,6 +504,30 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
         }}
       />
 
+      {/* Balance banner — mirrors MoodleImportPanel. AI 解析 will 402 from
+          the server when the balance is insufficient, and that 402 is what
+          flips `startParse` into its error branch. */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+          lowBalance
+            ? 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+            : 'bg-card border-border text-dim'
+        }`}
+      >
+        <Wallet size={14} className="shrink-0" />
+        <span className="flex-1">
+          余额 {balance === null ? '…' : formatUSD(balance)}
+          {lowBalance && '（余额不足，AI 解析将失败）'}
+        </span>
+        <button
+          type="button"
+          onClick={() => setTopupOpen(true)}
+          className="text-[11px] px-2 py-0.5 rounded bg-accent text-white font-medium"
+        >
+          充值
+        </button>
+      </div>
+
       {phase.stage === 'idle' && (
         <button
           type="button"
@@ -661,6 +717,7 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
           )
         }
       />
+      {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
     </section>
   )
 }

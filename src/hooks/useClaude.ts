@@ -37,14 +37,67 @@ export interface ParsedCourse {
   sessions: ParsedCourseSession[]
 }
 
+// Callers (MoodleImportPanel / FileImportPanel) inspect `stage` to
+// distinguish 'insufficient_balance' — which gets a "余额不足 + 充值"
+// affordance — from generic API errors.
+export class ClaudeProxyError extends Error {
+  constructor(
+    public readonly stage: string,
+    public readonly httpStatus: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ClaudeProxyError'
+  }
+}
+
+interface ProxyErrorBody {
+  stage?: string
+  message?: string
+}
+
+// Pulls `{stage, message}` out of a FunctionsHttpError's underlying Response
+// so `ClaudeProxyError.stage` is meaningful. Falls back to the plain
+// FunctionsHttpError.message if the body can't be parsed.
+async function normalizeFunctionError(
+  fnError: unknown,
+): Promise<ClaudeProxyError> {
+  const ctx = (fnError as { context?: Response }).context
+  const baseMsg =
+    fnError instanceof Error ? fnError.message : String(fnError)
+  if (ctx && typeof ctx.json === 'function') {
+    try {
+      const body = (await ctx.json()) as ProxyErrorBody
+      if (body?.stage) {
+        return new ClaudeProxyError(
+          body.stage,
+          ctx.status,
+          body.message ?? baseMsg,
+        )
+      }
+    } catch {
+      /* body wasn't JSON; fall through */
+    }
+    return new ClaudeProxyError('http_error', ctx.status, baseMsg)
+  }
+  return new ClaudeProxyError('unknown', 0, baseMsg)
+}
+
 interface EventsResponse {
   events: ParsedEvent[]
   usage?: unknown
+  // claude-proxy now charges server-side and reports back how much was
+  // actually deducted (0 on refund paths). Clients can show a toast or
+  // just call reload() on their balance.
+  charged_usd?: number
+  refunded?: boolean
 }
 
 interface CoursesResponse {
   courses: ParsedCourse[]
   usage?: unknown
+  charged_usd?: number
+  refunded?: boolean
 }
 
 function courseRefs(courses: Course[]) {
@@ -80,8 +133,8 @@ export function useClaude() {
             },
           },
         )
-        if (fnError) throw fnError
-        if (!data) throw new Error('空响应')
+        if (fnError) throw await normalizeFunctionError(fnError)
+        if (!data) throw new ClaudeProxyError('no_data', 0, '空响应')
         return data.events
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -119,8 +172,8 @@ export function useClaude() {
             },
           },
         )
-        if (fnError) throw fnError
-        if (!data) throw new Error('空响应')
+        if (fnError) throw await normalizeFunctionError(fnError)
+        if (!data) throw new ClaudeProxyError('no_data', 0, '空响应')
         return data.events
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -161,8 +214,8 @@ export function useClaude() {
             },
           },
         )
-        if (fnError) throw fnError
-        if (!data) throw new Error('空响应')
+        if (fnError) throw await normalizeFunctionError(fnError)
+        if (!data) throw new ClaudeProxyError('no_data', 0, '空响应')
         return data.events
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -189,8 +242,8 @@ export function useClaude() {
           },
         },
       )
-      if (fnError) throw fnError
-      if (!data) throw new Error('空响应')
+      if (fnError) throw await normalizeFunctionError(fnError)
+      if (!data) throw new ClaudeProxyError('no_data', 0, '空响应')
       return data.courses
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

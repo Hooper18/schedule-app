@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 
+// Note: DB column names are `balance_cny` / `amount_cny` for legacy reasons
+// (the system started out priced in RMB). The stored numbers are USD now;
+// see src/lib/balance.ts.
 export interface BalanceTransaction {
   id: string
   amount_cny: number

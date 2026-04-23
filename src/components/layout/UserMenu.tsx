@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { User, Settings, LogOut, Wallet, HelpCircle } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useBalance } from '../../hooks/useBalance'
-import { formatCNY, LOW_BALANCE_THRESHOLD_CNY } from '../../lib/balance'
+import { formatUSD, LOW_BALANCE_THRESHOLD_USD } from '../../lib/balance'
 import TopupModal from '../TopupModal'
 import HelpModal from '../HelpModal'
 
@@ -30,7 +30,7 @@ export default function UserMenu() {
     }
   }, [open])
 
-  const low = balance !== null && balance < LOW_BALANCE_THRESHOLD_CNY
+  const low = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   return (
     <div ref={rootRef} className="relative">
@@ -73,7 +73,7 @@ export default function UserMenu() {
             <span
               className={`ml-auto text-xs ${low ? 'text-red-500 font-medium' : 'text-dim'}`}
             >
-              {balance === null ? '…' : formatCNY(balance)}
+              {balance === null ? '…' : formatUSD(balance)}
             </span>
           </button>
 

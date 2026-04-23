@@ -48,7 +48,7 @@ export default function TermsModal({ onClose }: Props) {
 
           <h3 className="font-semibold text-text mt-4">费用说明</h3>
           <p>
-            基础功能免费。AI 解析按实际 API 成本计价（约为供应商成本的三倍，用于覆盖代理服务器与运营费用），通过充值余额扣费，充值记录与消费明细可在账户内查看。
+            基础功能免费。AI 解析按实际 API 成本计价（约为供应商成本的两倍，用于覆盖代理服务器与运营费用），以 USD 计价，通过充值余额扣费。充值记录与消费明细可在账户内查看。
           </p>
 
           <h3 className="font-semibold text-text mt-4">免责声明</h3>

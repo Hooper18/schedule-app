@@ -1,14 +1,19 @@
 // Supabase Edge Function: balance-deduct
 //
-// Pre-deducts a pending AI-parse charge from the caller's balance. Thin
-// wrapper around the `deduct_balance` Postgres RPC — the function exists so
-// that:
-//   1. The client never touches user_balance directly (RLS has no UPDATE
-//      policy on that table).
-//   2. We can later extend this path to include server-side cost calculation
-//      (e.g., proxying the Claude call and charging actual token usage).
+// Pre-deducts a pending charge from the caller's balance. Thin wrapper
+// around the `deduct_balance` Postgres RPC — the function exists so that
+// the client never touches user_balance directly (RLS has no UPDATE
+// policy on that table).
 //
-// Body: { amount_cny: number, description: string }
+// NOTE: The main AI flow (claude-proxy) now deducts server-side from the
+// actual request payload and no longer goes through here. This function
+// is kept for legacy callers and for manually-priced features that may
+// arrive later. Because the amount is still client-supplied, a hard cap
+// is enforced to limit blast-radius if a malicious client tries to drain
+// a user's own balance via this path.
+//
+// Body: { amount_cny: number, description: string } — value is USD despite
+//       the legacy `_cny` name (see src/lib/balance.ts).
 // Returns: { ok: true, new_balance } or { ok: false, stage, message }
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
@@ -16,6 +21,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2"
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? ""
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? ""
+
+// Defense-in-depth: reject any single deduction above this threshold.
+// $2.00 is 2× the per-call cap in claude-proxy so it won't block legit
+// usage but does stop an obvious runaway loop.
+const MAX_DEDUCT_USD = 2.0
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -77,6 +87,13 @@ Deno.serve(async (req: Request) => {
   const description = String(body.description ?? "").trim()
   if (!Number.isFinite(amount) || amount <= 0) {
     return jsonError(400, "validate_input", "amount_cny must be a positive number")
+  }
+  if (amount > MAX_DEDUCT_USD) {
+    return jsonError(
+      400,
+      "validate_input",
+      `amount_cny exceeds per-call cap $${MAX_DEDUCT_USD.toFixed(2)}`,
+    )
   }
   if (!description) {
     return jsonError(400, "validate_input", "description is required")

@@ -43,7 +43,7 @@ export function useInviteRedemption(onRedeemed?: () => void) {
       localStorage.removeItem(PENDING_INVITE_CODE_KEY)
       setState({
         status: 'success',
-        message: '邀请码已激活，获得 ¥1.00 新用户福利',
+        message: '邀请码已激活，获得 $1.00 新用户福利',
       })
       onRedeemed?.()
     })()

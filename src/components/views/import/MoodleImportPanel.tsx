@@ -19,17 +19,14 @@ import TopupModal from '../../TopupModal'
 import type { Course, EventSource, EventType, Semester } from '../../../lib/types'
 import { supabase } from '../../../lib/supabase'
 import { useAuth } from '../../../contexts/AuthContext'
-import { useClaude } from '../../../hooks/useClaude'
+import { useClaude, ClaudeProxyError } from '../../../hooks/useClaude'
 import { useCalendar } from '../../../hooks/useCalendar'
 import { useBalance } from '../../../hooks/useBalance'
 import {
-  // TODO: 重新启用扣费
-  // deductBalance,
-  // estimateCourseParseCostUsd,
-  // refundBalance,
-  // usdToCny,
-  formatCNY,
-  LOW_BALANCE_THRESHOLD_CNY,
+  API_COST_MULTIPLIER,
+  estimateCourseParseCostUsd,
+  formatUSD,
+  LOW_BALANCE_THRESHOLD_USD,
 } from '../../../lib/balance'
 import type { FileKind } from '../../../lib/fileParsers'
 
@@ -142,6 +139,12 @@ async function withRetry<T>(fn: () => Promise<T>, delayMs: number): Promise<T> {
   try {
     return await fn()
   } catch (e) {
+    // Don't retry when the server already told us the balance is empty —
+    // waiting 10s won't magically top it up, and a retry would just eat
+    // another Claude proxy round-trip before failing the same way.
+    if (e instanceof ClaudeProxyError && e.stage === 'insufficient_balance') {
+      throw e
+    }
     console.warn(
       '[MoodleImportPanel] parse failed, retrying in',
       delayMs,
@@ -269,9 +272,6 @@ interface AICourseState {
   source: EventSource
   sourceFile: string
   error?: string
-  // Amount pre-deducted in CNY. Kept so error paths can refund the exact
-  // amount that was charged up front.
-  deductedCny?: number
 }
 
 export default function MoodleImportPanel({
@@ -284,8 +284,7 @@ export default function MoodleImportPanel({
   const { user } = useAuth()
   const { parseFileText, parseImage } = useClaude()
   const { entries: calendar } = useCalendar(semester.id)
-  // TODO: 重新启用扣费 — 用回 reload: reloadBalance
-  const { balance } = useBalance()
+  const { balance, reload: reloadBalance } = useBalance()
   const [topupOpen, setTopupOpen] = useState(false)
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [filesOpen, setFilesOpen] = useState<Record<number, boolean>>({})
@@ -314,35 +313,20 @@ export default function MoodleImportPanel({
 
   const runAIParse = useCallback(
     async (ci: number, mc: MoodleCourse) => {
-      // TODO: 重新启用扣费
-      // const bytes = (mc.downloaded_files ?? []).reduce(
-      //   (s, f) => s + (f.size ?? 0),
-      //   0,
-      // )
-      // const chars = mc.page_content?.text?.length ?? 0
-      // const costUsd = estimateCourseParseCostUsd(bytes, chars)
-      // const costCny = Number(usdToCny(costUsd).toFixed(2))
-      // const description = `Moodle 课件 AI 解析：${mc.course_code ?? mc.course_name ?? '未命名'}`
-      //
-      // const deduct = await deductBalance(costCny, description)
-      // if (!deduct.ok) {
-      //   const isInsufficient = deduct.message?.includes('insufficient balance')
-      //   setAIState((prev) => ({
-      //     ...prev,
-      //     [ci]: {
-      //       status: isInsufficient ? 'insufficient_balance' : 'error',
-      //       newEvents: [],
-      //       source: 'moodle_scan',
-      //       sourceFile: 'moodle_scan',
-      //       error: isInsufficient
-      //         ? `需要 ${formatCNY(costCny)}，余额不足`
-      //         : deduct.message || '扣费失败',
-      //     },
-      //   }))
-      //   reloadBalance()
-      //   return
-      // }
-      // reloadBalance()
+      // Pre-compute a display-only cost estimate (used in the insufficient-
+      // balance error message). Actual deduction is done server-side inside
+      // claude-proxy from the real request body — the client can't lowball
+      // this value to cheat.
+      const bytes = (mc.downloaded_files ?? []).reduce(
+        (s, f) => s + (f.size ?? 0),
+        0,
+      )
+      const chars = mc.page_content?.text?.length ?? 0
+      const estUsd = Number(
+        (estimateCourseParseCostUsd(bytes, chars) * API_COST_MULTIPLIER).toFixed(
+          2,
+        ),
+      )
 
       setAIState((prev) => ({
         ...prev,
@@ -407,9 +391,8 @@ export default function MoodleImportPanel({
 
         const trimmed = combinedText.trim()
         if (!trimmed && !hasImage) {
-          // TODO: 重新启用扣费
-          // await refundBalance(costCny, `${description}（无内容，退款）`)
-          // reloadBalance()
+          // Nothing to send — skip both the AI call and any charge. No
+          // refund bookkeeping needed because we never called claude-proxy.
           setAIState((prev) => ({
             ...prev,
             [ci]: {
@@ -478,23 +461,40 @@ export default function MoodleImportPanel({
           },
         }))
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        // TODO: 重新启用扣费
-        // await refundBalance(costCny, `${description}（失败退款）`)
-        // reloadBalance()
-        setAIState((prev) => ({
-          ...prev,
-          [ci]: {
-            status: 'error',
-            newEvents: [],
-            source: 'moodle_scan',
-            sourceFile: 'moodle_scan',
-            error: msg,
-          },
-        }))
+        // claude-proxy handles refunds server-side: if Claude errors or
+        // returns empty, the server already called refund_balance before
+        // responding. We only need to classify the error for the UI.
+        if (e instanceof ClaudeProxyError && e.stage === 'insufficient_balance') {
+          setAIState((prev) => ({
+            ...prev,
+            [ci]: {
+              status: 'insufficient_balance',
+              newEvents: [],
+              source: 'moodle_scan',
+              sourceFile: 'moodle_scan',
+              error: `需要 ${formatUSD(estUsd)}，余额不足`,
+            },
+          }))
+        } else {
+          const msg = e instanceof Error ? e.message : String(e)
+          setAIState((prev) => ({
+            ...prev,
+            [ci]: {
+              status: 'error',
+              newEvents: [],
+              source: 'moodle_scan',
+              sourceFile: 'moodle_scan',
+              error: msg,
+            },
+          }))
+        }
+      } finally {
+        // Server-side deduction/refund may have changed the balance — pull
+        // a fresh value regardless of outcome so the banner stays accurate.
+        reloadBalance()
       }
     },
-    [calendar, courses, parseFileText, parseImage, semester],
+    [calendar, courses, parseFileText, parseImage, semester, reloadBalance],
   )
 
   // Auto-select all events when a new payload arrives; also drop any overrides
@@ -881,7 +881,7 @@ export default function MoodleImportPanel({
     )
   }
 
-  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_CNY
+  const lowBalance = balance !== null && balance < LOW_BALANCE_THRESHOLD_USD
 
   return (
     <section className="space-y-3">
@@ -894,7 +894,7 @@ export default function MoodleImportPanel({
       >
         <Wallet size={14} className="shrink-0" />
         <span className="flex-1">
-          余额 {balance === null ? '…' : formatCNY(balance)}
+          余额 {balance === null ? '…' : formatUSD(balance)}
           {lowBalance && '（余额不足，AI 解析将跳过）'}
         </span>
         <button
