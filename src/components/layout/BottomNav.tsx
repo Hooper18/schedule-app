@@ -1,10 +1,13 @@
 import { NavLink } from 'react-router-dom'
-import { ListChecks, Calendar, LayoutGrid, Plus } from 'lucide-react'
+import { Home, ListChecks, Calendar, Plus } from 'lucide-react'
 
+// Bottom navigation for mobile. 课表 is intentionally NOT here — the Home
+// page surfaces "今日课程" + a "查看完整课表" shortcut, which covers the
+// in-situ use cases without burning a permanent nav slot.
 const items = [
-  { to: '/', label: '待办', Icon: ListChecks, end: true },
+  { to: '/', label: '首页', Icon: Home, end: true },
+  { to: '/todo', label: '待办', Icon: ListChecks },
   { to: '/calendar', label: '日历', Icon: Calendar },
-  { to: '/timetable', label: '课表', Icon: LayoutGrid },
   { to: '/import', label: '添加', Icon: Plus },
 ]
 

@@ -9,7 +9,9 @@ import type {
   WeeklySchedule,
 } from '../../lib/types'
 import { getDaysUntil, isoOf, parseDate, todayISO, weekNumber } from '../../lib/utils'
+import { computeCurrentAndNext } from '../../lib/sessionUtils'
 import EventCard from '../shared/EventCard'
+import { CurrentClassCard, NextClassCard } from '../shared/ClassStatusCards'
 
 interface Props {
   selectedDate: string
@@ -21,19 +23,6 @@ interface Props {
   onToggle: (id: string, status: EventStatus) => void
   onEdit: (e: Event) => void
   onSelectDate?: (iso: string) => void
-}
-
-function toMin(hhmm: string) {
-  const [h, m] = hhmm.split(':').map(Number)
-  return (h || 0) * 60 + (m || 0)
-}
-
-function formatDuration(mins: number): string {
-  if (mins < 1) return '不到 1 分钟'
-  if (mins < 60) return `${mins} 分钟`
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分钟`
 }
 
 // Desktop-only right rail: selected-day events → selected-day classes →
@@ -83,12 +72,9 @@ export default function DayDetailPanel({
   const daySchedule = scheduleByDay.get(d.getDay()) ?? []
   const isToday = selectedDate === isoOf(new Date())
 
-  // Current (today-only) + the next session *chronologically*. The "next"
-  // is allowed to spill into tomorrow and beyond — if nothing is scheduled
-  // for the rest of today we walk forward up to 7 days (one schedule cycle)
-  // through scheduleByDay to find the earliest class on the next day that
-  // has one. `minsUntil` is only meaningful for offset 0; other offsets
-  // render a weekday label instead of a minute countdown.
+  // Only a live snapshot when the panel is showing today; for other dates
+  // the current/next class concept doesn't apply (it would always refer to
+  // "now"), so we short-circuit to nulls and let the UI hide the cards.
   const { currentSession, nextSession, nextOffset, minsRemaining, minsUntil } =
     useMemo(() => {
       if (!isToday) {
@@ -100,44 +86,8 @@ export default function DayDetailPanel({
           minsUntil: 0,
         }
       }
-      const now = new Date()
-      const nowMin = now.getHours() * 60 + now.getMinutes()
-      const todayDow = now.getDay()
-
-      const cur =
-        daySchedule.find(
-          (s) => nowMin >= toMin(s.start_time) && nowMin < toMin(s.end_time),
-        ) ?? null
-      const afterMin = cur ? toMin(cur.end_time) : nowMin
-
-      // Today first (after the currently in-progress session if any).
-      const todayNext =
-        daySchedule.find((s) => toMin(s.start_time) >= afterMin) ?? null
-
-      let nxt: WeeklySchedule | null = todayNext
-      let offset = 0
-      if (!todayNext) {
-        // Walk forward up to 7 days. scheduleByDow() already sorts each
-        // day's sessions by start_time, so arr[0] is the first class.
-        for (let i = 1; i <= 7; i++) {
-          const dow = (todayDow + i) % 7
-          const arr = scheduleByDay.get(dow) ?? []
-          if (arr.length > 0) {
-            nxt = arr[0]
-            offset = i
-            break
-          }
-        }
-      }
-
-      return {
-        currentSession: cur,
-        nextSession: nxt,
-        nextOffset: offset,
-        minsRemaining: cur ? toMin(cur.end_time) - nowMin : 0,
-        minsUntil: nxt && offset === 0 ? toMin(nxt.start_time) - nowMin : 0,
-      }
-    }, [isToday, daySchedule, scheduleByDay])
+      return computeCurrentAndNext(scheduleByDay, new Date())
+    }, [isToday, scheduleByDay])
 
   const highlightSession = currentSession ?? (nextOffset === 0 ? nextSession : null)
 
@@ -299,114 +249,6 @@ export default function DayDetailPanel({
         </section>
       </div>
     </aside>
-  )
-}
-
-function CurrentClassCard({
-  session,
-  course,
-  minsRemaining,
-}: {
-  session: WeeklySchedule | null
-  course: Course | null
-  minsRemaining: number
-}) {
-  // Always render so "currently in class" stays a stable slot users can scan;
-  // when nothing is in progress we show an idle state instead of hiding.
-  if (!session || !course) {
-    return (
-      <div className="rounded-lg border border-border bg-card/60 px-3 py-2.5">
-        <div className="text-[10px] font-semibold text-dim uppercase tracking-wider">
-          正在上课
-        </div>
-        <div className="text-xs text-dim mt-1">当前无课程进行中</div>
-      </div>
-    )
-  }
-  return (
-    <div className="rounded-lg border-2 border-accent bg-accent/15 px-3 py-2.5 space-y-1">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-semibold text-accent uppercase tracking-wider">
-          ● 正在上课
-        </div>
-        <div className="text-[10px] text-accent font-medium">
-          还剩 {formatDuration(minsRemaining)}
-        </div>
-      </div>
-      <div className="text-sm font-semibold text-text font-mono">
-        {course.code}
-      </div>
-      <div className="text-xs text-text break-words leading-snug">
-        {course.name}
-      </div>
-      <div className="text-[11px] text-dim flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="font-mono">
-          {session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}
-        </span>
-        {session.location && (
-          <span className="inline-flex items-center gap-0.5">
-            <MapPin size={10} className="shrink-0" /> {session.location}
-          </span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const DAY_NAMES_SHORT = ['日', '一', '二', '三', '四', '五', '六']
-
-function relativeDayLabel(offset: number, sessionDow: number): string {
-  if (offset === 1) return '明天'
-  if (offset >= 2 && offset <= 6) return `周${DAY_NAMES_SHORT[sessionDow]}`
-  if (offset === 7) return `下周${DAY_NAMES_SHORT[sessionDow]}`
-  return ''
-}
-
-function NextClassCard({
-  session,
-  course,
-  offset,
-  minsUntil,
-}: {
-  session: WeeklySchedule
-  course: Course | null
-  offset: number
-  minsUntil: number
-}) {
-  const badge =
-    offset === 0
-      ? minsUntil <= 0
-        ? '即将开始'
-        : `${formatDuration(minsUntil)}后`
-      : relativeDayLabel(offset, session.day_of_week)
-
-  return (
-    <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 space-y-1">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-semibold text-accent/80 uppercase tracking-wider">
-          下一节课
-        </div>
-        <div className="text-[10px] text-accent/80 font-medium">{badge}</div>
-      </div>
-      <div className="text-sm font-semibold text-text font-mono">
-        {course?.code ?? '未知课程'}
-      </div>
-      {course && (
-        <div className="text-xs text-text break-words leading-snug">
-          {course.name}
-        </div>
-      )}
-      <div className="text-[11px] text-dim flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="font-mono">
-          {session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}
-        </span>
-        {session.location && (
-          <span className="inline-flex items-center gap-0.5">
-            <MapPin size={10} className="shrink-0" /> {session.location}
-          </span>
-        )}
-      </div>
-    </div>
   )
 }
 

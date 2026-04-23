@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
+  Home,
   ListChecks,
   Calendar,
-  LayoutGrid,
   Plus,
   Settings,
   HelpCircle,
@@ -11,17 +11,18 @@ import {
 import HelpModal from '../HelpModal'
 
 // Desktop-only left rail. Mirrors BottomNav's route list so either surface
-// navigates the same way. Settings is rendered disabled for now — no route
-// yet, kept as a visual anchor at the bottom.
+// navigates the same way. 课表 is intentionally off — Home surfaces
+// today's classes + a "view full timetable" shortcut. Settings is rendered
+// disabled for now; no route yet, kept as a visual anchor.
 const items: Array<{
   to: string
   label: string
   Icon: typeof ListChecks
   end?: boolean
 }> = [
-  { to: '/', label: '待办', Icon: ListChecks, end: true },
+  { to: '/', label: '首页', Icon: Home, end: true },
+  { to: '/todo', label: '待办', Icon: ListChecks },
   { to: '/calendar', label: '日历', Icon: Calendar },
-  { to: '/timetable', label: '课表', Icon: LayoutGrid },
   { to: '/import', label: '添加', Icon: Plus },
 ]
 

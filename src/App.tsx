@@ -5,6 +5,7 @@ import { useSemesterBootstrap } from './hooks/useSemesterBootstrap'
 import AuthPage from './pages/Auth'
 import ResetPassword from './pages/ResetPassword'
 import InviteRedemptionBanner from './components/InviteRedemptionBanner'
+import Home from './pages/Home'
 import Timeline from './pages/Timeline'
 import CalendarPage from './pages/Calendar'
 import Courses from './pages/Courses'
@@ -48,7 +49,8 @@ function AppRoutes() {
           element={user && !isRecoverySession ? <Navigate to="/" replace /> : <AuthPage />}
         />
         <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/" element={<Protected><Timeline /></Protected>} />
+        <Route path="/" element={<Protected><Home /></Protected>} />
+        <Route path="/todo" element={<Protected><Timeline /></Protected>} />
         <Route path="/calendar" element={<Protected><CalendarPage /></Protected>} />
         <Route path="/timetable" element={<Protected><WeeklySchedule /></Protected>} />
         {/* Legacy URL; keeps bookmarks working after rename to /timetable. */}
