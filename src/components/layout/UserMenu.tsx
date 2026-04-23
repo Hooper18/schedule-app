@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { User, Settings, LogOut, Wallet, HelpCircle } from 'lucide-react'
+import {
+  User,
+  Settings,
+  LogOut,
+  Wallet,
+  HelpCircle,
+  Ticket,
+} from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useBalance } from '../../hooks/useBalance'
 import { formatUSD, LOW_BALANCE_THRESHOLD_USD } from '../../lib/balance'
 import TopupModal from '../TopupModal'
 import HelpModal from '../HelpModal'
+import RedeemInviteModal from '../RedeemInviteModal'
 
 export default function UserMenu() {
   const { user, signOut } = useAuth()
@@ -12,6 +20,7 @@ export default function UserMenu() {
   const [open, setOpen] = useState(false)
   const [topupOpen, setTopupOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [redeemOpen, setRedeemOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -81,6 +90,18 @@ export default function UserMenu() {
             type="button"
             onClick={() => {
               setOpen(false)
+              setRedeemOpen(true)
+            }}
+            className="w-full px-3 py-2.5 flex items-center gap-2 text-sm text-text hover:bg-hover transition-colors"
+          >
+            <Ticket size={14} className="text-dim" />
+            <span>兑换邀请码</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
               setHelpOpen(true)
             }}
             className="w-full px-3 py-2.5 flex items-center gap-2 text-sm text-text hover:bg-hover transition-colors"
@@ -117,6 +138,10 @@ export default function UserMenu() {
       )}
 
       {topupOpen && <TopupModal onClose={() => setTopupOpen(false)} />}
+      <RedeemInviteModal
+        open={redeemOpen}
+        onClose={() => setRedeemOpen(false)}
+      />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   )
