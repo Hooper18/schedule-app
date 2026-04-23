@@ -268,10 +268,9 @@ export default function CalendarView() {
   if (mode === 'week') {
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="p-2 md:p-3 border-b border-border flex flex-row flex-wrap items-center justify-center gap-2 shrink-0">
-          <ViewSwitcher mode={mode} onChange={setMode} />
-          <LayerToggle layers={layers} onChange={setLayers} />
-        </div>
+        {/* WeekView owns its own two-row header: week-nav first, then
+            mode/layers. Swapping the rows here (vs in the outer) keeps the
+            scroll-isolation structure contained in one place. */}
         <WeekView
           cursor={weekCursor}
           onCursorChange={setWeekCursor}
@@ -280,6 +279,9 @@ export default function CalendarView() {
           eventsByDate={eventsByDate}
           semester={semester}
           layers={layers}
+          onLayersChange={setLayers}
+          mode={mode}
+          onModeChange={setMode}
           onSelectDate={(iso) => {
             setSelected(iso)
             setMode('day')
@@ -828,6 +830,9 @@ interface WeekViewProps {
   eventsByDate: Map<string, Event[]>
   semester: Parameters<typeof weekNumber>[1]
   layers: Layers
+  onLayersChange: (l: Layers) => void
+  mode: Mode
+  onModeChange: (m: Mode) => void
   onSelectDate: (iso: string) => void
 }
 
@@ -839,6 +844,9 @@ function WeekView({
   eventsByDate,
   semester,
   layers,
+  onLayersChange,
+  mode,
+  onModeChange,
   onSelectDate,
 }: WeekViewProps) {
   const isDesktop = useIsDesktop()
@@ -923,7 +931,8 @@ function WeekView({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      {/* Week controls */}
+      {/* Row 1: Week nav (date range / prev-next / 本周). First per design —
+          the primary context shift lives above the view-mode switcher. */}
       <div className="px-4 py-2 flex items-center justify-between border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <button
@@ -960,15 +969,30 @@ function WeekView({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-auto pb-6">
-        {/* Mobile pill day strip — lives *inside* the same scroll container
-            as the grid so they pan together, and uses the same grid column
-            template so each pill's center aligns exactly with its column
-            below. Hidden on desktop (the grid's inline header takes over). */}
-        <div
-          className="md:hidden sticky top-0 z-30 bg-main border-b border-border px-1 py-1.5 grid"
-          style={{ gridTemplateColumns: gridTemplate }}
-        >
+      {/* Row 2: view-mode switcher + event/course layer toggles. Owned by
+          WeekView (not the outer CalendarView) so they sit below the week
+          nav only for this view. */}
+      <div className="p-2 md:p-3 border-b border-border flex flex-row flex-wrap items-center justify-center gap-2 shrink-0">
+        <ViewSwitcher mode={mode} onChange={onModeChange} />
+        <LayerToggle layers={layers} onChange={onLayersChange} />
+      </div>
+
+      {/* Horizontal-scroll boundary. Wraps both the pill strip and the grid
+          so they pan horizontally together on mobile (columns stay aligned
+          even when the 7-day grid is wider than the viewport). Vertical
+          scroll is isolated to the inner grid scroller below, which means
+          the three rows above never move — solving the month-view-style
+          "dragging the grid also drags the header" issue for week view. */}
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden overscroll-contain">
+        <div style={{ minWidth: 'max-content' }} className="h-full flex flex-col">
+          {/* Row 3: Mobile pill day strip. No longer sticky — it lives in a
+              pinned flex-col position above the inner vertical scroller.
+              Shares the grid's gridTemplateColumns so each pill sits
+              directly above its column in the grid below. */}
+          <div
+            className="md:hidden shrink-0 bg-main border-b border-border px-1 py-1.5 grid"
+            style={{ gridTemplateColumns: gridTemplate }}
+          >
           <div aria-hidden />
           {weekDays.map((day) => {
             const iso = isoOf(day)
@@ -1003,14 +1027,18 @@ function WeekView({
               </button>
             )
           })}
-        </div>
+          </div>
 
-        <div
-          className="grid md:min-w-[800px]"
-          style={{ gridTemplateColumns: gridTemplate }}
-        >
-          {/* Desktop-only header row (8 cells). Hidden on mobile so the pill
-              strip above acts as the column labels instead. */}
+          {/* Inner vertical scroller — grid rows (time axis + day columns)
+              scroll up/down here. pb-24 on mobile keeps the last hour row
+              from sitting under the BottomNav. */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-24 md:pb-6">
+            <div
+              className="grid md:min-w-[800px]"
+              style={{ gridTemplateColumns: gridTemplate }}
+            >
+              {/* Desktop-only header row (8 cells). Hidden on mobile so the pill
+                  strip above acts as the column labels instead. */}
           <div className="hidden md:block sticky top-0 z-20 bg-main border-b border-border" />
           {weekDays.map((day) => {
             const iso = isoOf(day)
@@ -1169,6 +1197,8 @@ function WeekView({
               </div>
             )
           })}
+            </div>
+          </div>
         </div>
       </div>
     </div>
