@@ -1,10 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-  MapPin,
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight, MapPin } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
 import { useEvents } from '../../hooks/useEvents'
@@ -238,7 +233,10 @@ export default function CalendarView() {
   if (mode === 'day') {
     return (
       <div className="h-full overflow-y-auto no-scrollbar">
-        <div className="p-3 border-b border-border flex flex-col md:flex-row items-center justify-center gap-2">
+        {/* Mode switcher + layer toggles on a single row even on mobile —
+            matches the month view's header density. Tapping the 月 pill in
+            ViewSwitcher is the way back out, so no dedicated back link. */}
+        <div className="p-3 border-b border-border flex flex-row flex-wrap items-center justify-center gap-2">
           <ViewSwitcher mode={mode} onChange={setMode} />
           <LayerToggle layers={layers} onChange={setLayers} />
         </div>
@@ -253,7 +251,6 @@ export default function CalendarView() {
           onEdit={setEditing}
           onPrevDay={() => setSelected((iso) => shiftDate(iso, -1))}
           onNextDay={() => setSelected((iso) => shiftDate(iso, 1))}
-          onBackToMonth={() => setMode('month')}
         />
         <EventModal
           event={editing}
@@ -583,28 +580,37 @@ function Cell({
         >
           {d.getDate()}
         </span>
-        {inMonth && daySessions.length > 0 && (
-          <span
-            className="text-[8px] md:text-[10px] text-dim font-mono leading-none font-medium"
-            title={`${daySessions.length} 节课`}
-          >
-            {daySessions.length}节
-          </span>
+        {/* Right side of the date row holds two compact indicators:
+            (a) mobile-only event dots — previously lived in a separate
+                `mt-auto pb-0.5` row at the bottom of the 48px cell, which
+                meant 4px dots hugging the border and easily missed. Moving
+                them up to the date row (same slot as the course count)
+                makes the "has events" signal legible at a glance.
+            (b) course count label ("N节"). */}
+        {inMonth && (dots.length > 0 || daySessions.length > 0) && (
+          <div className="flex items-center gap-0.5 md:gap-1">
+            {dots.length > 0 && (
+              <div className="flex gap-0.5 md:hidden">
+                {dots.map((c, i) => (
+                  <span
+                    key={i}
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            )}
+            {daySessions.length > 0 && (
+              <span
+                className="text-[8px] md:text-[10px] text-dim font-mono leading-none font-medium"
+                title={`${daySessions.length} 节课`}
+              >
+                {daySessions.length}节
+              </span>
+            )}
+          </div>
         )}
       </div>
-
-      {/* Mobile dot row */}
-      {dots.length > 0 && (
-        <div className="flex gap-0.5 mt-auto pb-0.5 md:hidden">
-          {dots.map((c, i) => (
-            <span
-              key={i}
-              className="w-1 h-1 rounded-full"
-              style={{ backgroundColor: c }}
-            />
-          ))}
-        </div>
-      )}
 
       {/* Desktop pill stack */}
       {visiblePills.length > 0 && (
@@ -645,7 +651,6 @@ interface DayProps {
   onEdit: (event: Event) => void
   onPrevDay: () => void
   onNextDay: () => void
-  onBackToMonth: () => void
 }
 
 function DayView({
@@ -659,7 +664,6 @@ function DayView({
   onEdit,
   onPrevDay,
   onNextDay,
-  onBackToMonth,
 }: DayProps) {
   const d = parseDate(date)
   const wk = weekNumber(date, semester)
@@ -668,14 +672,6 @@ function DayView({
   ).padStart(2, '0')} ${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`
   return (
     <div className="p-4 space-y-4">
-      <button
-        type="button"
-        onClick={onBackToMonth}
-        className="text-xs text-dim hover:text-accent flex items-center gap-1"
-      >
-        <ArrowLeft size={12} /> 返回月视图
-      </button>
-
       <div className="flex items-center justify-between">
         <button onClick={onPrevDay} className="p-1.5 rounded hover:bg-hover text-dim">
           <ChevronLeft size={18} />
