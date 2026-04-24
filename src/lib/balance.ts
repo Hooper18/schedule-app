@@ -20,20 +20,29 @@ export function formatUSD(amount: number): string {
 // Balance below this threshold triggers the "余额不足" warning in the UI.
 export const LOW_BALANCE_THRESHOLD_USD = 0.1
 
-// Rough upper-bound token-cost estimator for a file AI parse, in USD
-// (raw API cost, not multiplied by API_COST_MULTIPLIER). Kept on the
-// client ONLY as a preview for the user; actual deduction is computed
-// server-side in the claude-proxy edge function from the real request
-// body, so a malicious client can't lowball the amount.
-// Rates assume Claude 3.5 Sonnet ($3/M input, $15/M output).
+// Rough cost estimator for a Claude AI parse call, in raw USD (NOT yet
+// multiplied by API_COST_MULTIPLIER). Used only as a UI preview / "needed
+// amount" in insufficient-balance toasts; the real deduction is computed
+// server-side in claude-proxy from the actual request payload.
+//
+// `textBytes` MUST be the UTF-8 size of the extracted text actually sent
+// to the API — never raw binary file sizes. A 10MB PPTX extracts to ~50KB
+// of text; passing the raw 10MB used to overestimate by 100×+.
+//
+// Tokens ≈ UTF-8 bytes / 4 for mixed Chinese/English text (Anthropic
+// tokenizer). Vision tokens ≈ image bytes / 600 (rough — Anthropic
+// actually charges by image dimensions: width×height/750 tokens).
+// Pricing: Claude Haiku 4.5 — $1/M input, $5/M output. The model is
+// chosen server-side in claude-proxy; keep this in sync if it changes.
 export function estimateCourseParseCostUsd(
-  bytes: number,
-  chars: number,
+  textBytes: number,
+  imageBytes: number = 0,
 ): number {
-  const inputTokens = bytes / 3 + chars / 2
-  const inputCost = (inputTokens / 1_000_000) * 3
-  const outputCost = 0.02 // generous flat — real replies are small JSON
-  return Math.max(0.01, inputCost + outputCost)
+  const inputTokens = textBytes / 4 + imageBytes / 600
+  const inputCost = (inputTokens / 1_000_000) * 1
+  // Tool-use JSON reply rarely exceeds ~4K tokens. Generous flat estimate.
+  const outputCost = 0.02
+  return Math.max(0.001, inputCost + outputCost)
 }
 
 export interface DeductResult {

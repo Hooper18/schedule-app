@@ -269,11 +269,16 @@ export default function FileImportPanel({ semester, courses, onSaved }: Props) {
     })
 
     // Display-only estimate for the insufficient-balance toast. Real
-    // deduction is computed server-side in claude-proxy, not from this.
-    const bytes = files.reduce((s, f) => s + f.file.size, 0)
+    // deduction is computed server-side in claude-proxy. Use the EXTRACTED
+    // text size + image bytes — never raw file binary sizes (a 10MB PPTX
+    // extracts to ~50KB of text, so file.size would overestimate 100×+).
+    const textBytes = new TextEncoder().encode(payloadText).length
+    const imageBytes = image ? Math.floor((image.base64.length * 3) / 4) : 0
     const estUsd = Number(
-      (estimateCourseParseCostUsd(bytes, payloadText.length) * API_COST_MULTIPLIER)
-        .toFixed(2),
+      (
+        estimateCourseParseCostUsd(textBytes, imageBytes) *
+        API_COST_MULTIPLIER
+      ).toFixed(2),
     )
 
     try {

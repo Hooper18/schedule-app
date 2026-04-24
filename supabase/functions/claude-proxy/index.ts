@@ -60,10 +60,13 @@ const MIN_COST_USD = 0.01
 const MAX_COST_USD = 2.0
 
 // Matches estimateCourseParseCostUsd() in src/lib/balance.ts. Rates assume
-// Claude 3.5 Sonnet ($3/M input, $15/M output).
-function estimateRawCostUsd(bytes: number, chars: number): number {
-  const inputTokens = bytes / 3 + chars / 2
-  const inputCost = (inputTokens / 1_000_000) * 3
+// Claude Haiku 4.5 ($1/M input, $5/M output) — the model selected below.
+// Tokens ≈ UTF-8 bytes / 4 for mixed Chinese/English text. Vision tokens
+// ≈ image bytes / 600 (rough — Anthropic actually charges by image
+// dimensions: width×height/750 tokens).
+function estimateRawCostUsd(textBytes: number, imageBytes: number): number {
+  const inputTokens = textBytes / 4 + imageBytes / 600
+  const inputCost = (inputTokens / 1_000_000) * 1
   const outputCost = 0.02
   return Math.max(MIN_COST_USD, inputCost + outputCost)
 }
@@ -962,14 +965,15 @@ Deno.serve(async (req) => {
   // Cost is computed from what this server actually received, NOT from a
   // client-supplied number. Encoding the text in UTF-8 gives a stable byte
   // count that matches Claude's token accounting better than string length.
+  // Image bytes are billed at a separate (cheaper-per-byte) ratio because
+  // vision tokens are dimension-based, not size-based.
   const textBytes = new TextEncoder().encode(input).length
   const imageBytes = isImageImport
     ? base64DecodedSize(
         typeof body.image_base64 === "string" ? body.image_base64 : "",
       )
     : 0
-  const totalBytes = textBytes + imageBytes
-  const rawCostUsd = estimateRawCostUsd(totalBytes, input.length)
+  const rawCostUsd = estimateRawCostUsd(textBytes, imageBytes)
   const saleCostUsd = Number((rawCostUsd * API_COST_MULTIPLIER).toFixed(2))
   // Reject obviously over-sized requests up front rather than silently
   // capping. If this fires, the caller is probably uploading too much in

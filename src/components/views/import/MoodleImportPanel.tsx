@@ -313,20 +313,13 @@ export default function MoodleImportPanel({
 
   const runAIParse = useCallback(
     async (ci: number, mc: MoodleCourse) => {
-      // Pre-compute a display-only cost estimate (used in the insufficient-
-      // balance error message). Actual deduction is done server-side inside
-      // claude-proxy from the real request body — the client can't lowball
-      // this value to cheat.
-      const bytes = (mc.downloaded_files ?? []).reduce(
-        (s, f) => s + (f.size ?? 0),
-        0,
-      )
-      const chars = mc.page_content?.text?.length ?? 0
-      const estUsd = Number(
-        (estimateCourseParseCostUsd(bytes, chars) * API_COST_MULTIPLIER).toFixed(
-          2,
-        ),
-      )
+      // Display-only estimate for the insufficient-balance toast. Computed
+      // AFTER text extraction below — raw PPTX/PDF file sizes are 50–200×
+      // bigger than the extracted text the API actually sees, so estimating
+      // from binary file bytes used to produce wildly inflated $30+ figures
+      // for normal-sized courses. Actual deduction is computed server-side
+      // in claude-proxy from the real request body.
+      let estUsd = 0
 
       setAIState((prev) => ({
         ...prev,
@@ -404,6 +397,20 @@ export default function MoodleImportPanel({
           }))
           return
         }
+
+        // Now we know what's actually going to the API — text size after
+        // extraction + the first image (claude-proxy file_import takes at
+        // most one). Mirrors the server-side cost calc in claude-proxy.
+        const textBytes = new TextEncoder().encode(trimmed).length
+        const imageBytes = hasImage
+          ? Math.floor((images[0].data.length * 3) / 4)
+          : 0
+        estUsd = Number(
+          (
+            estimateCourseParseCostUsd(textBytes, imageBytes) *
+            API_COST_MULTIPLIER
+          ).toFixed(2),
+        )
 
         // Single API call per course (with one 10s-delayed retry on any
         // error — usually a 429 from the 50K tokens/min bucket). Claude-
