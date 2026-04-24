@@ -973,20 +973,24 @@ function WeekView({
         <LayerToggle layers={layers} onChange={onLayersChange} />
       </div>
 
-      {/* Horizontal-scroll boundary. Wraps both the pill strip and the grid
-          so they pan horizontally together on mobile (columns stay aligned
-          even when the 7-day grid is wider than the viewport). Vertical
-          scroll is isolated to the inner grid scroller below, which means
-          the three rows above never move — solving the month-view-style
-          "dragging the grid also drags the header" issue for week view. */}
-      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden overscroll-contain">
-        <div style={{ minWidth: 'max-content' }} className="h-full flex flex-col">
-          {/* Row 3: Mobile pill day strip. No longer sticky — it lives in a
-              pinned flex-col position above the inner vertical scroller.
-              Shares the grid's gridTemplateColumns so each pill sits
-              directly above its column in the grid below. */}
+      {/* Single scroll container for both axes. Previous attempt nested two
+          scroll containers (outer overflow-x, inner overflow-y) so the pill
+          strip could live in a "fixed" area above the vertical scroll —
+          but the inner container's implicit overflow-x:auto swallowed
+          horizontal pans instead of letting them bubble to the outer one,
+          which silently killed horizontal scroll on mobile.
+          Simpler: one scroll box with overflow-auto; pill is `sticky top-0`
+          so it visually pins to the top when scrolling vertically, and
+          pans horizontally with the grid because they share this same
+          scroll container AND the same gridTemplateColumns. Rows 1 and 2
+          above are still shrink-0 and never move. */}
+      <div className="flex-1 min-h-0 overflow-auto overscroll-contain pb-24 md:pb-6">
+          {/* Row 3: Mobile pill day strip — sticky top-0 pins vertically;
+              horizontal pan follows the grid because they live in the same
+              scrolling container. Shares gridTemplateColumns with the grid
+              below so each pill sits directly above its column. */}
           <div
-            className="md:hidden shrink-0 bg-main border-b border-border px-1 py-1.5 grid"
+            className="md:hidden sticky top-0 z-30 bg-main border-b border-border px-1 py-1.5 grid"
             style={{ gridTemplateColumns: gridTemplate }}
           >
           <div aria-hidden />
@@ -1025,10 +1029,6 @@ function WeekView({
           })}
           </div>
 
-          {/* Inner vertical scroller — grid rows (time axis + day columns)
-              scroll up/down here. pb-24 on mobile keeps the last hour row
-              from sitting under the BottomNav. */}
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-24 md:pb-6">
             <div
               className="grid md:min-w-[800px]"
               style={{ gridTemplateColumns: gridTemplate }}
@@ -1194,8 +1194,6 @@ function WeekView({
             )
           })}
             </div>
-          </div>
-        </div>
       </div>
     </div>
   )
