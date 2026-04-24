@@ -1,4 +1,10 @@
-import { Download, AlertTriangle, Chrome, Wallet } from 'lucide-react'
+import {
+  Download,
+  AlertTriangle,
+  Chrome,
+  Wallet,
+  Smartphone,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import Modal from './shared/Modal'
 
@@ -239,6 +245,56 @@ export default function HelpModal({ open, onClose }: Props) {
             这一步不是必需的 —— Moodle 导入通常已经覆盖绝大部分 DDL，课件上传只作为补充来源。
           </p>
         </StepSection>
+
+        {/* Not a numbered Step — it's a tip-style banner. PWA install isn't
+            part of the data-import workflow, just a QoL upgrade that lives
+            at the end so users notice it after they've set everything up. */}
+        <div className="flex items-start gap-3 rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-3">
+          <Smartphone size={18} className="shrink-0 mt-0.5 text-sky-600" />
+          <div className="min-w-0 text-sm text-text leading-relaxed break-words space-y-2">
+            <div className="font-semibold">添加到手机桌面（可选）</div>
+            <p className="text-xs text-dim">
+              在手机浏览器中打开{' '}
+              <Code>calendar.tuchenguang.com</Code>
+              ，将本应用添加到桌面，获得无浏览器框的原生 App 体验。
+            </p>
+
+            <div className="space-y-2 text-xs">
+              <div>
+                <div className="text-text font-medium mb-0.5">
+                  iPhone（Safari）
+                </div>
+                <ol className="list-decimal list-outside pl-5 space-y-0.5 marker:text-dim text-dim">
+                  <li>点击底部中间的分享按钮（方框 + 箭头图标）</li>
+                  <li>向下滑动找到「添加到主屏幕」</li>
+                  <li>点击「添加」</li>
+                </ol>
+              </div>
+
+              <div>
+                <div className="text-text font-medium mb-0.5">
+                  Android（Chrome）
+                </div>
+                <ol className="list-decimal list-outside pl-5 space-y-0.5 marker:text-dim text-dim">
+                  <li>点击右上角三个点菜单</li>
+                  <li>点击「添加到主屏幕」或「安装应用」</li>
+                  <li>点击「安装」</li>
+                </ol>
+              </div>
+
+              <div>
+                <div className="text-text font-medium mb-0.5">
+                  Android（Edge）
+                </div>
+                <ol className="list-decimal list-outside pl-5 space-y-0.5 marker:text-dim text-dim">
+                  <li>点击底部三个点菜单</li>
+                  <li>点击「添加到手机」</li>
+                  <li>点击「安装」</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </Modal>
   )
