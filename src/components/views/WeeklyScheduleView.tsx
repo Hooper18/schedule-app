@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MapPin } from 'lucide-react'
+import { ChevronDown, ChevronUp, MapPin } from 'lucide-react'
 import { useSemester } from '../../hooks/useSemester'
 import { useCourses } from '../../hooks/useCourses'
+import { useEvents } from '../../hooks/useEvents'
 import { useIsDesktop } from '../../hooks/useIsDesktop'
-import type { Course, WeeklySchedule } from '../../lib/types'
+import EventCard from '../shared/EventCard'
+import EventModal from '../shared/EventModal'
+import { isoOf } from '../../lib/utils'
+import type { Course, Event, WeeklySchedule } from '../../lib/types'
 
 // Display labels use Monday-first; the DB column day_of_week is 0=Sun..6=Sat
 // (inherited from AC Online), so remap for layout.
@@ -44,6 +48,7 @@ function colorForCode(code: string) {
 export default function WeeklyScheduleView() {
   const { semester } = useSemester()
   const { courses, schedule, loading } = useCourses(semester?.id)
+  const { events, setStatus, reload: reloadEvents } = useEvents(semester?.id)
   const isDesktop = useIsDesktop()
   // Vertical density: the desktop grid breathes; on mobile we pack hours
   // tighter so users see more of the day without scrolling.
@@ -92,7 +97,8 @@ export default function WeeklyScheduleView() {
   const nowMin = now.getHours() * 60 + now.getMinutes()
   const nowInRange = nowMin >= startMin && nowMin <= endMin
 
-  // Monday of the displayed week — used for the column header date numbers.
+  // Monday of the displayed week — used for both column header date numbers
+  // and the "本周事件" filter range.
   const weekDates = useMemo(() => {
     const monday = new Date(now)
     monday.setHours(0, 0, 0, 0)
@@ -104,6 +110,31 @@ export default function WeeklyScheduleView() {
     })
   }, [now, todayDow])
 
+  const weekEvents = useMemo(() => {
+    if (weekDates.length === 0) return []
+    const startISO = isoOf(weekDates[0])
+    const endISO = isoOf(weekDates[6])
+    return events
+      .filter(
+        (e) =>
+          e.date !== null &&
+          e.date >= startISO &&
+          e.date <= endISO &&
+          e.status !== 'cancelled',
+      )
+      .sort((a, b) => {
+        const ad = a.date ?? ''
+        const bd = b.date ?? ''
+        if (ad !== bd) return ad < bd ? -1 : 1
+        const at = a.time ?? ''
+        const bt = b.time ?? ''
+        if (at && bt) return at < bt ? -1 : at > bt ? 1 : 0
+        if (at) return -1
+        if (bt) return 1
+        return 0
+      })
+  }, [events, weekDates])
+
   const [mobileDay, setMobileDay] = useState(todayDow)
   // Auto-advance the mobile selection when the real weekday rolls over, but
   // only if the user hasn't manually picked another day yet this session.
@@ -111,6 +142,9 @@ export default function WeeklyScheduleView() {
   useEffect(() => {
     if (!mobileDayUserSet) setMobileDay(todayDow)
   }, [todayDow, mobileDayUserSet])
+
+  const [editingEvent, setEditingEvent] = useState<Event | null>(null)
+  const [eventsPanelOpen, setEventsPanelOpen] = useState(false)
 
   const timeLabels: number[] = []
   for (let m = startMin; m <= endMin; m += 60) timeLabels.push(m)
@@ -208,7 +242,7 @@ export default function WeeklyScheduleView() {
   )
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden relative">
       {/* Mobile day picker */}
       <div className="md:hidden px-2 py-1.5 border-b border-border flex gap-1 shrink-0">
         {DAY_LABELS_SHORT.map((lbl, i) => {
@@ -316,6 +350,106 @@ export default function WeeklyScheduleView() {
             {sessionsByDay[mobileDay].map(renderSession)}
           </div>
         </div>
+      </div>
+
+      <ThisWeekEventsPanel
+        events={weekEvents}
+        courseById={courseById}
+        semester={semester}
+        open={eventsPanelOpen}
+        onToggleOpen={() => setEventsPanelOpen((v) => !v)}
+        onEdit={setEditingEvent}
+        onToggleStatus={setStatus}
+      />
+
+      <EventModal
+        event={editingEvent}
+        courses={courses}
+        onClose={() => setEditingEvent(null)}
+        onSaved={reloadEvents}
+      />
+    </div>
+  )
+}
+
+interface PanelProps {
+  events: Event[]
+  courseById: Map<string, Course>
+  semester: NonNullable<ReturnType<typeof useSemester>['semester']>
+  open: boolean
+  onToggleOpen: () => void
+  onEdit: (e: Event) => void
+  onToggleStatus: (id: string, status: 'pending' | 'completed') => void
+}
+
+function ThisWeekEventsPanel({
+  events,
+  courseById,
+  semester,
+  open,
+  onToggleOpen,
+  onEdit,
+  onToggleStatus,
+}: PanelProps) {
+  const empty = events.length === 0
+  const expanded = open && !empty
+
+  return (
+    <div className="fixed left-3 right-3 bottom-[72px] md:left-auto md:right-4 md:bottom-4 md:w-96 z-30 pointer-events-none">
+      <div className="pointer-events-auto flex flex-col items-stretch md:items-end gap-2">
+        {expanded && (
+          <div
+            className="rounded-2xl border border-border bg-card shadow-xl overflow-hidden flex flex-col w-full"
+            style={{ maxHeight: '50vh' }}
+          >
+            <div className="shrink-0 px-3 py-2 border-b border-border flex items-center justify-between">
+              <span className="text-sm font-semibold text-text">
+                本周事件 · {events.length} 条
+              </span>
+              <button
+                type="button"
+                onClick={onToggleOpen}
+                className="text-xs text-dim hover:text-text px-2 py-1 rounded-md hover:bg-hover transition-colors"
+              >
+                收起
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+              {events.map((e) => (
+                <EventCard
+                  key={e.id}
+                  event={e}
+                  course={e.course_id ? courseById.get(e.course_id) : undefined}
+                  semester={semester}
+                  onToggle={onToggleStatus}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={empty ? undefined : onToggleOpen}
+          disabled={empty}
+          className={`w-full md:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full shadow-lg border text-sm font-medium transition-colors ${
+            empty
+              ? 'bg-card border-border text-dim cursor-not-allowed'
+              : open
+                ? 'bg-card border-border text-text hover:bg-hover'
+                : 'bg-accent border-accent text-white hover:opacity-90'
+          }`}
+        >
+          {empty ? (
+            <span>本周无事件</span>
+          ) : (
+            <>
+              <span>本周事件 ({events.length})</span>
+              {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            </>
+          )}
+        </button>
       </div>
     </div>
   )
