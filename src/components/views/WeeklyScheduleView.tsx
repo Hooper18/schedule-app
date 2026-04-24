@@ -92,6 +92,18 @@ export default function WeeklyScheduleView() {
   const nowMin = now.getHours() * 60 + now.getMinutes()
   const nowInRange = nowMin >= startMin && nowMin <= endMin
 
+  // Monday of the displayed week — used for the column header date numbers.
+  const weekDates = useMemo(() => {
+    const monday = new Date(now)
+    monday.setHours(0, 0, 0, 0)
+    monday.setDate(monday.getDate() - todayDow)
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday)
+      d.setDate(monday.getDate() + i)
+      return d
+    })
+  }, [now, todayDow])
+
   const [mobileDay, setMobileDay] = useState(todayDow)
   // Auto-advance the mobile selection when the real weekday rolls over, but
   // only if the user hasn't manually picked another day yet this session.
@@ -170,15 +182,19 @@ export default function WeeklyScheduleView() {
     )
   }
 
+  // Skip the i=0 line — the header's bottom border serves as the top edge of
+  // the body, and a duplicated line at top:0 was visually doubling it.
   const renderGridBackground = () => (
     <>
-      {Array.from({ length: hours }).map((_, i) => (
-        <div
-          key={i}
-          className="absolute left-0 right-0 border-t border-border/60"
-          style={{ top: `${i * HOUR_PX}px` }}
-        />
-      ))}
+      {Array.from({ length: hours }).map((_, i) =>
+        i === 0 ? null : (
+          <div
+            key={i}
+            className="absolute left-0 right-0 border-t border-border/60"
+            style={{ top: `${i * HOUR_PX}px` }}
+          />
+        ),
+      )}
     </>
   )
 
@@ -222,51 +238,63 @@ export default function WeeklyScheduleView() {
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-auto pb-24 md:pb-6">
-        {/* Desktop week grid */}
-        <div
-          className="hidden md:grid min-w-[880px]"
-          style={{ gridTemplateColumns: '60px repeat(7, minmax(0, 1fr))' }}
-        >
-          <div className="sticky top-0 z-20 bg-main border-b border-border" />
-          {DAY_LABELS.map((d, i) => (
-            <div
-              key={i}
-              className={`sticky top-0 z-20 bg-main px-2 py-2 text-xs font-medium text-center border-b border-border ${
-                i === todayDow ? 'text-accent font-semibold' : 'text-dim'
-              }`}
-            >
-              {d}
-            </div>
-          ))}
-
+        {/* Desktop week grid: header is its own sticky row so bg-main covers
+            every column uniformly — sticky-on-each-cell was leaving columns
+            without sessions looking like the body grid lines pierced up. */}
+        <div className="hidden md:block min-w-[880px]">
           <div
-            className="relative border-r border-border"
-            style={{ height: `${gridHeight}px` }}
+            className="sticky top-0 z-20 grid bg-main border-b border-border"
+            style={{ gridTemplateColumns: '60px repeat(7, minmax(0, 1fr))' }}
           >
-            {timeLabels.map((m) => (
+            <div className="px-2 py-2" />
+            {DAY_LABELS.map((d, i) => (
               <div
-                key={m}
-                className="absolute right-2 text-[10px] text-muted -translate-y-1/2 font-mono"
-                style={{ top: `${((m - startMin) / 60) * HOUR_PX}px` }}
+                key={i}
+                className={`px-2 py-2 text-xs text-center ${
+                  i === todayDow ? 'text-accent font-semibold' : 'text-dim font-medium'
+                }`}
               >
-                {fmtHour(m)}
+                <div>{d}</div>
+                <div className="text-[10px] text-muted font-normal mt-0.5">
+                  {weekDates[i].getMonth() + 1}/{weekDates[i].getDate()}
+                </div>
               </div>
             ))}
           </div>
 
-          {sessionsByDay.map((sessions, dayIdx) => (
+          <div
+            className="grid"
+            style={{ gridTemplateColumns: '60px repeat(7, minmax(0, 1fr))' }}
+          >
             <div
-              key={dayIdx}
-              // No column-wide today tint — header already marks today, and
-              // the red now-line runs through this column anyway.
-              className="relative border-r border-border last:border-r-0"
+              className="relative border-r border-border"
               style={{ height: `${gridHeight}px` }}
             >
-              {renderGridBackground()}
-              {nowInRange && dayIdx === todayDow && renderNowLine()}
-              {sessions.map(renderSession)}
+              {timeLabels.map((m) => (
+                <div
+                  key={m}
+                  className="absolute right-2 text-[10px] text-muted -translate-y-1/2 font-mono"
+                  style={{ top: `${((m - startMin) / 60) * HOUR_PX}px` }}
+                >
+                  {fmtHour(m)}
+                </div>
+              ))}
             </div>
-          ))}
+
+            {sessionsByDay.map((sessions, dayIdx) => (
+              <div
+                key={dayIdx}
+                // No column-wide today tint — header already marks today, and
+                // the red now-line runs through this column anyway.
+                className="relative border-r border-border last:border-r-0"
+                style={{ height: `${gridHeight}px` }}
+              >
+                {renderGridBackground()}
+                {nowInRange && dayIdx === todayDow && renderNowLine()}
+                {sessions.map(renderSession)}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Mobile single-day view */}
