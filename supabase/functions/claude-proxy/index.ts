@@ -59,11 +59,14 @@ const MIN_COST_USD = 0.01
 // than silently bleed a user's balance.
 const MAX_COST_USD = 2.0
 
-// Matches estimateCourseParseCostUsd() in src/lib/balance.ts. Rates assume
-// Claude Haiku 4.5 ($1/M input, $5/M output) — the model selected below.
-// Tokens ≈ UTF-8 bytes / 4 for mixed Chinese/English text. Vision tokens
-// ≈ image bytes / 600 (rough — Anthropic actually charges by image
-// dimensions: width×height/750 tokens).
+// MUST stay byte-for-byte identical to estimateCourseParseCostUsd() in
+// src/lib/balance.ts. Edits here require `supabase functions deploy
+// claude-proxy` to take effect — a stale deploy is how users end up
+// seeing an old pricing formula while the client preview shows a new one.
+// Rates assume Claude Haiku 4.5 ($1/M input, $5/M output) — the model
+// selected below. Tokens ≈ UTF-8 bytes / 4 for mixed Chinese/English text.
+// Vision tokens ≈ image bytes / 600 (rough — Anthropic actually charges by
+// image dimensions: width×height/750 tokens).
 function estimateRawCostUsd(textBytes: number, imageBytes: number): number {
   const inputTokens = textBytes / 4 + imageBytes / 600
   const inputCost = (inputTokens / 1_000_000) * 1

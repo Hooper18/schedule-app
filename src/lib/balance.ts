@@ -23,7 +23,12 @@ export const LOW_BALANCE_THRESHOLD_USD = 0.1
 // Rough cost estimator for a Claude AI parse call, in raw USD (NOT yet
 // multiplied by API_COST_MULTIPLIER). Used only as a UI preview / "needed
 // amount" in insufficient-balance toasts; the real deduction is computed
-// server-side in claude-proxy from the actual request payload.
+// server-side in claude-proxy from the actual request payload. This
+// function MUST stay byte-for-byte identical to estimateRawCostUsd() in
+// supabase/functions/claude-proxy/index.ts — when you change one, update
+// the other AND redeploy the Edge Function (`supabase functions deploy
+// claude-proxy`), otherwise the client's preview and the server's actual
+// charge will drift apart.
 //
 // `textBytes` MUST be the UTF-8 size of the extracted text actually sent
 // to the API — never raw binary file sizes. A 10MB PPTX extracts to ~50KB
@@ -34,6 +39,7 @@ export const LOW_BALANCE_THRESHOLD_USD = 0.1
 // actually charges by image dimensions: width×height/750 tokens).
 // Pricing: Claude Haiku 4.5 — $1/M input, $5/M output. The model is
 // chosen server-side in claude-proxy; keep this in sync if it changes.
+export const MIN_COST_USD = 0.01
 export function estimateCourseParseCostUsd(
   textBytes: number,
   imageBytes: number = 0,
@@ -42,7 +48,7 @@ export function estimateCourseParseCostUsd(
   const inputCost = (inputTokens / 1_000_000) * 1
   // Tool-use JSON reply rarely exceeds ~4K tokens. Generous flat estimate.
   const outputCost = 0.02
-  return Math.max(0.001, inputCost + outputCost)
+  return Math.max(MIN_COST_USD, inputCost + outputCost)
 }
 
 export interface DeductResult {
