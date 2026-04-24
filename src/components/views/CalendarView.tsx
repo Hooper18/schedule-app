@@ -926,7 +926,16 @@ function WeekView({
   const wk = weekNumber(isoOf(weekStart), semester)
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+    // Height chain (必须每一级都有确切高度，否则 flex-1 min-h-0 的滚动
+    // 容器会 fallback 到内容高度、不触发 overflow-auto 的垂直滚动):
+    //   Layout 根 `h-dvh`
+    //   → main `flex-1 min-h-0 overflow-hidden`（flex-row 子）
+    //   → CalendarView 外层 `h-full flex flex-col overflow-hidden`
+    //   → WeekView 自身 `h-full flex flex-col overflow-hidden`（本行）
+    //   → 滚动容器 `flex-1 min-h-0 overflow-auto`
+    // 这里显式 `h-full` 而不是 `flex-1`，让 WeekView 的高度不依赖父层
+    // 是否恰好是 flex-col —— 更稳。
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Row 1: Week nav (date range / prev-next / 本周). First per design —
           the primary context shift lives above the view-mode switcher. */}
       <div className="px-4 py-2 flex items-center justify-between border-b border-border shrink-0">
